@@ -1,0 +1,2 @@
+pnpm dev:prettier:check
+pnpm dev:eslint

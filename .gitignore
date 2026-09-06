@@ -1,0 +1,8 @@
+/dist
+
+# Caches
+/node_modules
+.eslintcache
+
+# Test logs
+*.log

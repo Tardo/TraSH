@@ -1,0 +1,23 @@
+[ignore]
+<PROJECT_ROOT>/node_modules/.pnpm/hermes-estree@.*/node_modules/hermes-estree/.*
+<PROJECT_ROOT>/node_modules/.*
+
+[include]
+
+[libs]
+
+[lints]
+
+[options]
+include_warnings=true
+module.system.node.resolve_dirname=node_modules
+module.name_mapper='^@tardo/trash$' -> '<PROJECT_ROOT>/src/js/index.mjs'
+module.name_mapper='^@tardo/trash/\(.*\)$' -> '<PROJECT_ROOT>/src/js/\1'
+
+[strict]
+nonstrict-import
+unclear-type
+unsafe-getters-setters
+untyped-import
+untyped-type-import
+sketchy-null

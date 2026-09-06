@@ -1,0 +1,14 @@
+.github/
+.husky/
+examples/
+node_modules/
+src/
+tests/
+docs/
+.editorconfig
+.eslintignore
+.prettierignore
+trash.code-workspace
+package-lock.json
+rollup.config.mjs
+setup-jest.mjs

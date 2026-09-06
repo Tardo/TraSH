@@ -1,0 +1,36 @@
+name: Tests
+
+on:
+  schedule:
+    - cron: '0 0 * * SUN'
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Prettier
+        run: pnpm exec prettier . --check
+      - name: Flow
+        run: pnpm exec flow check
+      - name: ESLint
+        run: pnpm exec eslint .
+      - name: Tests
+        run: pnpm test

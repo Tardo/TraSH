@@ -1,0 +1,117 @@
+{
+  "name": "@tardo/trash",
+  "description": "Lightweight DSL for expressive scripting without eval (extracted from OdooTerminal)",
+  "version": "1.0.0",
+  "type": "module",
+  "keywords": [
+    "trash",
+    "dsl",
+    "domain-specific-language",
+    "scripting",
+    "interpreter",
+    "vm",
+    "odooterminal",
+    "shell",
+    "no-eval"
+  ],
+  "files": [
+    "LICENSE",
+    "README.md",
+    "dist/"
+  ],
+  "main": "./dist/index.mjs",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./argument": "./dist/argument.mjs",
+    "./constants": "./dist/constants.mjs",
+    "./frame": "./dist/frame.mjs",
+    "./function": "./dist/function.mjs",
+    "./interpreter": "./dist/interpreter.mjs",
+    "./translation": "./dist/translation.mjs",
+    "./vmachine": "./dist/vmachine.mjs",
+    "./core/*": "./dist/core/*.mjs",
+    "./exceptions/*": "./dist/exceptions/*.mjs",
+    "./utils/*": "./dist/utils/*.mjs",
+    "./package.json": "./package.json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/Tardo/TraSH.git"
+  },
+  "author": "Alexandre",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/Tardo/TraSH/issues"
+  },
+  "homepage": "https://github.com/Tardo/TraSH#readme",
+  "scripts": {
+    "prepare": "husky",
+    "clean": "rm -rf ./dist",
+    "build": "pnpm run clean && rollup -c",
+    "prepack": "pnpm run build",
+    "test:flow-package": "node tests/flow/package.mjs",
+    "benchmark": "node tests/benchmark.mjs",
+    "test": "pnpm run build && node --experimental-vm-modules ./node_modules/jest/bin/jest.js",
+    "dev:eslint": "eslint --color .",
+    "dev:prettier:check": "prettier --check .",
+    "dev:rollup:watch": "rollup -c -w",
+    "dev:flow:check": "flow check"
+  },
+  "devDependencies": {
+    "@babel/preset-flow": "^8.0.1",
+    "@eslint/js": "^10.0.1",
+    "@prettier/plugin-hermes": "^0.2.2",
+    "@rollup/plugin-babel": "^7.1.0",
+    "babel-plugin-syntax-hermes-parser": "^0.37.0",
+    "eslint": "^10.9.1",
+    "eslint-config-prettier": "^10.1.8",
+    "flow-bin": "^0.261.0",
+    "globals": "^17.12.0",
+    "hermes-eslint": "^0.37.0",
+    "husky": "^9.1.7",
+    "jest": "^30.5.1",
+    "prettier": "^3.9.6",
+    "rollup": "^4.63.1",
+    "rollup-plugin-analyzer": "^4.0.0"
+  },
+  "babel": {
+    "presets": [
+      "@babel/preset-flow"
+    ],
+    "plugins": [
+      "babel-plugin-syntax-hermes-parser"
+    ]
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/?(*.)test.?js"
+    ],
+    "moduleFileExtensions": [
+      "js",
+      "mjs"
+    ]
+  },
+  "prettier": {
+    "printWidth": 120,
+    "tabWidth": 2,
+    "semi": true,
+    "singleQuote": true,
+    "quoteProps": "as-needed",
+    "jsxSingleQuote": false,
+    "trailingComma": "all",
+    "bracketSpacing": false,
+    "bracketSameLine": false,
+    "arrowParens": "avoid",
+    "requirePragma": false,
+    "proseWrap": "always",
+    "htmlWhitespaceSensitivity": "css",
+    "vueIndentScriptAndStyle": false,
+    "endOfLine": "lf",
+    "embeddedLanguageFormatting": "auto",
+    "singleAttributePerLine": false,
+    "plugins": [
+      "@prettier/plugin-hermes"
+    ]
+  }
+}

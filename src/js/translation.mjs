@@ -6,8 +6,8 @@ export type TranslationValues = {[string]: mixed};
 export type Translator = (key: string, fallback: string, values?: TranslationValues) => string;
 
 function defaultTranslator(_key: string, fallback: string, values?: TranslationValues): string {
-  return fallback.replace(/{{\s*([^}]+?)\s*}}/g, (placeholder, name) => {
-    const value = values?.[name];
+  return fallback.replace(/{{([^{}]+)}}/g, (placeholder, name) => {
+    const value = values?.[name.trim()];
     return typeof value === 'undefined' ? placeholder : String(value);
   });
 }

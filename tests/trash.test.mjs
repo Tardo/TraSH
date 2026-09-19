@@ -35,3 +35,11 @@ test('uses a configurable translation function', () => {
     setTranslator();
   }
 });
+
+test('interpolates placeholders without backtracking on malformed input', () => {
+  expect(translate('key', '{{ \tname\n }}: {{count}} {{missing}}', {name: 'Ada', count: 0})).toBe('Ada: 0 {{missing}}');
+  expect(translate('key', '{{name}}')).toBe('{{name}}');
+  for (const fallback of ['{{' + ' '.repeat(100_000) + '!', '{{'.repeat(100_000) + 'name']) {
+    expect(translate('key', fallback, {name: 'Ada'})).toBe(fallback);
+  }
+});

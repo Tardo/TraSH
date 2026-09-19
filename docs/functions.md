@@ -154,7 +154,11 @@ await vmachine.execute(program, {aliases: {}, isData: false, silent: false});
 ```
 
 The first `processCommandJob` argument contains `cmdName`, `cmdRaw`, `cmdDef`,
-`kwargs`, and `args`. The second states whether the call used `silent`. Treat
+`kwargs`, `args`, `signal`, and `executionOptions`. When delegating to another
+`vmachine.execute(...)` call, forward `executionOptions` to preserve the error
+policy, cancellation signal, aliases, and shared instruction budget. Pass the
+same options object to retain the shared budget. The second argument states
+whether the call is silent (through syntax or execution options). Treat
 script-provided data as untrusted input, then apply application-specific
 validation and authorization before producing side effects.
 

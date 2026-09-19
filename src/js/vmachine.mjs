@@ -32,6 +32,7 @@ export type ProcessCommandJobOptions = {
   kwargs: CMDCallbackArgs,
   args: Array<string>,
   signal?: AbortSignal,
+  executionOptions: EvalOptions,
 };
 export type ProcessCommandJobCallback = (options: ProcessCommandJobOptions, silent: boolean) => Promise<mixed>;
 export type VMachineOptions = {
@@ -43,6 +44,8 @@ export type VMachineOptions = {
 };
 
 export type EvalOptions = {
+  // Propagate callback errors even for silent calls, without changing their output mode.
+  throwSilentErrors?: boolean,
   isData?: boolean,
   silent?: boolean,
   aliases?: {[string]: string},
@@ -215,7 +218,7 @@ export default class VMachine {
           // $FlowFixMe[class-object-subtyping]
           internal_res = await internal_cb(this, kwargs, frame, opts);
         } catch (err) {
-          if (!silent || err instanceof ExecutionStoppedError) {
+          if (!silent || opts.throwSilentErrors === true || err instanceof ExecutionStoppedError) {
             throw err;
           }
           return null;
@@ -233,11 +236,12 @@ export default class VMachine {
           kwargs: kwargs,
           args: frame.stack.map(item => String(item)),
           signal: opts.signal,
+          executionOptions: opts,
         },
         silent,
       );
     } catch (err) {
-      if (!silent || err instanceof ExecutionStoppedError) throw err;
+      if (!silent || opts.throwSilentErrors === true || err instanceof ExecutionStoppedError) throw err;
       return null;
     }
   }

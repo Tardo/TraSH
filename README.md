@@ -137,8 +137,9 @@ return 'pending'
   [compatibility rules](docs/runtime.md#variables-and-functions) for its use in argument position.
 - Calls accept positional arguments, `-short` arguments, and `--long` arguments.
 - Wrap a call that is part of an expression in parentheses: `(dict_get $user 'name')`.
-- `silent command ...` returns `null` if its execution callback throws. Argument validation and execution-control errors
-  still propagate; see the [error rules](docs/runtime.md#syntax-and-errors).
+- `silent command ...` returns `null` if its execution callback throws, unless execution uses `throwSilentErrors: true`.
+  Argument validation and execution-control errors still propagate; see the
+  [error rules](docs/runtime.md#syntax-and-errors).
 
 ## Standard library
 

@@ -27,5 +27,12 @@ export const jobOptions = (job: ProcessCommandJobOptions): DirectJobOptions => j
 
 // $FlowExpectedError[incompatible-type]
 const invalidOptions: VMachineOptions = {processCommandJob: 42};
-// $FlowExpectedError[incompatible-type]
-const invalidJob: DirectJobOptions = {cmdRaw: 42, cmdName: '', cmdDef: VMachine.makeCommand({}), kwargs: {}, args: []};
+const invalidJob: DirectJobOptions = {
+  // $FlowExpectedError[incompatible-type]
+  cmdRaw: 42,
+  cmdName: '',
+  cmdDef: VMachine.makeCommand({}),
+  kwargs: {},
+  args: [],
+  executionOptions: {throwSilentErrors: true},
+};

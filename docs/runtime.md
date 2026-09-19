@@ -101,6 +101,11 @@ block comments are rejected during parsing.
 both internal and host-delegated commands. Syntax errors, argument validation,
 rejected unsafe confirmations and execution-control errors still propagate.
 
+Pass `{throwSilentErrors: true}` to `vmachine.execute(...)` to propagate callback
+errors from silent calls as well, including nested functions. This option is
+per execution and does not change the `silent` flag passed to host commands.
+It also applies when collecting all results with the fourth argument.
+
 ## Performance
 
 Register commands once and reuse `interpreter.parse(...)` results when running

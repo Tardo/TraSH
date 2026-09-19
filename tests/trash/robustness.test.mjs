@@ -139,6 +139,63 @@ test('silent suppresses host callback errors consistently', async () => {
   await expect(run('fail')).rejects.toThrow('host failed');
 });
 
+test.each([FUNCTION_TYPE.Command, FUNCTION_TYPE.Internal, FUNCTION_TYPE.Native])(
+  'propagates silent callback errors by execution policy for function type %s',
+  async type => {
+    const error = new Error('callback failed');
+    const fail = async () => {
+      throw error;
+    };
+    const {run, vm, parse} = setup({processCommandJob: fail});
+    vm.registerCommand('fail', {type, callback: fail});
+    await expect(run('fail', {silent: true})).resolves.toBeNull();
+    await expect(run('fail', {silent: true, throwSilentErrors: true})).rejects.toBe(error);
+    await expect(run('silent fail', {throwSilentErrors: true})).rejects.toBe(error);
+    await expect(run('function nested() { silent fail }; nested', {throwSilentErrors: true})).rejects.toBe(error);
+    await expect(vm.execute(parse('fail'), {silent: true, throwSilentErrors: true}, undefined, true)).rejects.toBe(
+      error,
+    );
+    await expect(run('fail', {silent: true})).resolves.toBeNull();
+  },
+);
+
+test('keeps concurrent silent error policies independent', async () => {
+  const error = new Error('callback failed');
+  let release;
+  const gate = new Promise(resolve => {
+    release = resolve;
+  });
+  const {run, vm} = setup({
+    processCommandJob: async () => {
+      await gate;
+      throw error;
+    },
+  });
+  vm.registerCommand('fail', {});
+  const strict = expect(run('fail', {silent: true, throwSilentErrors: true})).rejects.toBe(error);
+  const legacy = expect(run('fail', {silent: true})).resolves.toBeNull();
+  release();
+  await Promise.all([strict, legacy]);
+});
+
+test('host-delegated executions retain options and share the instruction budget', async () => {
+  const error = new Error('callback failed');
+  const controller = new AbortController();
+  const {run, vm, parse} = setup({
+    processCommandJob: async ({cmdName, executionOptions}, silent) => {
+      expect(silent).toBe(true);
+      expect(executionOptions.signal).toBe(controller.signal);
+      expect(executionOptions.throwSilentErrors).toBe(true);
+      if (cmdName === 'fail') throw error;
+      return vm.execute(parse(cmdName === 'delegate' ? 'fail' : 'recurse'), executionOptions);
+    },
+  });
+  for (const name of ['fail', 'delegate', 'recurse']) vm.registerCommand(name, {});
+  const options = {silent: true, throwSilentErrors: true, signal: controller.signal, maxInstructions: 100};
+  await expect(run('delegate', options)).rejects.toBe(error);
+  await expect(run('recurse', options)).rejects.toThrow('Instruction limit exceeded');
+});
+
 test('required arguments are checked even when none are supplied', async () => {
   await expect(setup().run('dict_get')).rejects.toThrow();
 });

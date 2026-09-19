@@ -33,7 +33,8 @@ import type {ProcessCommandJobOptions} from '@tardo/trash/vmachine';
 ## Complete example
 
 The following program registers the whole standard library, declares a TraSH function, and delegates the `notify`
-command to the JavaScript host. Save it as `example.mjs` and run `node example.mjs`.
+command to the JavaScript host. It configures an instruction budget and timer-driven cancellation. Save it as
+`example.mjs` and run `node example.mjs`.
 
 ```js
 import {
@@ -52,6 +53,7 @@ import {
 
 const interpreter = new Interpreter();
 const vmachine = new VMachine({
+  maxInstructions: 100_000,
   processCommandJob: async ({cmdName, kwargs}) => {
     if (cmdName !== 'notify') {
       throw new Error(`Unknown host command: ${cmdName}`);
@@ -78,7 +80,7 @@ const source = `
   }
 
   $values = [1, 2, 3, 4]
-  $squares = (arr_map $values $$square)
+  $squares = (arr_map $values $square)
   $total = (arr_reduce $squares 0 (function (sum, value) {
     return $sum + $value
   }))
@@ -88,13 +90,22 @@ const source = `
 const program = interpreter.parse(source, {
   registeredCmds: vmachine.getRegisteredCmds(),
 });
-const result = await vmachine.execute(program);
-
-console.log(result); // Total of squares: 30 (2 times)
+const controller = new AbortController();
+const timer = setTimeout(() => controller.abort(), 1000);
+try {
+  const result = await vmachine.execute(program, {signal: controller.signal});
+  console.log(result); // Total of squares: 30 (2 times)
+} finally {
+  clearTimeout(timer);
+}
 ```
 
 `processCommandJob` is the boundary between TraSH and the host application. Validate and perform all side effects there,
 such as database writes, navigation, or API calls.
+
+The default budget is 1,000,000 instructions; this example lowers it to 100,000. Cancellation is cooperative: host
+operations must also honor the `signal` received by `processCommandJob`. See the
+[runtime contract](docs/runtime.md#execution-limits-and-cancellation) for details.
 
 ## Translations
 
@@ -126,7 +137,8 @@ return 'pending'
   [compatibility rules](docs/runtime.md#variables-and-functions) for its use in argument position.
 - Calls accept positional arguments, `-short` arguments, and `--long` arguments.
 - Wrap a call that is part of an expression in parentheses: `(dict_get $user 'name')`.
-- `silent command ...` suppresses an error from that call and returns `null` in that error case.
+- `silent command ...` returns `null` if its execution callback throws. Argument validation and execution-control errors
+  still propagate; see the [error rules](docs/runtime.md#syntax-and-errors).
 
 ## Standard library
 

@@ -1,4 +1,4 @@
-name: Publish npm package
+name: Stage npm package
 
 on:
   release:
@@ -22,8 +22,9 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
           registry-url: https://registry.npmjs.org/
+      - run: npm install --global npm@11.15.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
-      - run: npm publish --access public --provenance
+      - run: npm stage publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

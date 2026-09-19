@@ -17,6 +17,10 @@ test.each(['__proto__', 'constructor', 'prototype'])(
     for (const source of [
       `$d = {}; $d['${key}']`,
       `$d = {}; $d['${key}'] = {polluted: true}`,
+      `$d = {}; $d['${key}'] += 1`,
+      `$d = {}; $d['${key}'] -= 1`,
+      `$d = {}; $d['${key}'] *= 1`,
+      `$d = {}; $d['${key}'] /= 1`,
       `{'${key}': 1}`,
       `dict_set {} '${key}' 1`,
       `dict_get {} '${key}'`,

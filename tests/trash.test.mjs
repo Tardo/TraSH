@@ -1,5 +1,4 @@
-import {Frame, Interpreter, setTranslator, translate, VMachine} from '@tardo/trash';
-import registerStr from '@tardo/trash/core/str/__all__';
+import {ARG, Frame, Interpreter, setTranslator, translate, VMachine} from '@tardo/trash';
 
 test('matches Shell evaluation semantics', async () => {
   const interpreter = new Interpreter();
@@ -7,7 +6,6 @@ test('matches Shell evaluation semantics', async () => {
     processCommandJob: async () => null,
     silent: false,
   });
-  registerStr(vmachine);
   const evaluate = (source, isolatedFrame = false, all = false) =>
     vmachine.execute(
       interpreter.parse(source, {registeredCmds: vmachine.getRegisteredCmds()}),
@@ -21,7 +19,6 @@ test('matches Shell evaluation semantics', async () => {
   await evaluate('$value = 8', true);
   await expect(evaluate('$value')).resolves.toBe(4);
   await expect(evaluate('1; 2; 3', false, true)).resolves.toEqual([1, 2, 3]);
-  await expect(evaluate("str_upper 'world'")).resolves.toBe('WORLD');
 });
 
 test('uses a configurable translation function', () => {
@@ -34,6 +31,25 @@ test('uses a configurable translation function', () => {
   } finally {
     setTranslator();
   }
+});
+
+test('registers plugins without exposing the runtime', async () => {
+  const interpreter = new Interpreter();
+  const vmachine = new VMachine({processCommandJob: async () => null});
+  vmachine.use(api => {
+    api.registerCommand('apply', {
+      args: [
+        [ARG.Number, ['v', 'value'], true, 'Value'],
+        [ARG.Any, ['f', 'transform'], true, 'Transform'],
+      ],
+      callback: async ({callFunction}, {value, transform}) => callFunction(transform, [value]),
+    });
+  });
+
+  const program = interpreter.parse('apply 4 (function (value: Number) { return $value + 1 })', {
+    registeredCmds: vmachine.getRegisteredCmds(),
+  });
+  await expect(vmachine.execute(program)).resolves.toBe(5);
 });
 
 test('interpolates placeholders without backtracking on malformed input', () => {

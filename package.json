@@ -1,7 +1,7 @@
 {
   "name": "@tardo/trash",
   "description": "Lightweight DSL for expressive scripting without eval (extracted from OdooTerminal)",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "type": "module",
   "keywords": [
     "trash",
@@ -29,7 +29,7 @@
     "./interpreter": "./dist/interpreter.mjs",
     "./translation": "./dist/translation.mjs",
     "./vmachine": "./dist/vmachine.mjs",
-    "./core/*": "./dist/core/*.mjs",
+    "./plugin": "./dist/plugin.mjs",
     "./exceptions/*": "./dist/exceptions/*.mjs",
     "./utils/*": "./dist/utils/*.mjs",
     "./package.json": "./package.json"

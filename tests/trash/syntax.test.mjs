@@ -51,7 +51,7 @@ describe('ported OdooTerminal TraSH syntax behavior', () => {
     expect(results[1][3][2][1]).toBe('oops');
     expect(results[1][3][2][2]).toBe(251);
     expect(results[1][3][2][3].key).toBe('the value');
-    results = await trash.eval("$var = []; arr_append $var 'value'");
+    results = await trash.eval("$var = []; $var[0] = 'value'; $var");
     expect(results[0]).toBe('value');
   });
 

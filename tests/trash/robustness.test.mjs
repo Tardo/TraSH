@@ -1,10 +1,35 @@
-import {ARG, FUNCTION_TYPE, Interpreter, VMachine, registerArr, registerDict} from '@tardo/trash';
+import {ARG, FUNCTION_TYPE, Interpreter, VMachine} from '@tardo/trash';
 
 function setup(options = {}) {
   const interpreter = new Interpreter();
   const vm = new VMachine({processCommandJob: async () => null, ...options});
-  registerArr(vm);
-  registerDict(vm);
+  vm.use(api => {
+    api.registerCommand('property_get', {
+      args: [
+        [ARG.Any, ['v', 'value'], true, 'Value'],
+        [ARG.Any, ['k', 'key'], true, 'Property key'],
+      ],
+      callback: async ({propertyKey}, {value, key}) => value[propertyKey(key)],
+    });
+    api.registerCommand('property_set', {
+      args: [
+        [ARG.Any, ['v', 'value'], true, 'Value'],
+        [ARG.Any, ['k', 'key'], true, 'Property key'],
+        [ARG.Any, ['i', 'item'], true, 'Value to set'],
+      ],
+      callback: async ({propertyKey}, {value, key, item}) => {
+        value[propertyKey(key)] = item;
+        return value;
+      },
+    });
+    api.registerCommand('invoke', {
+      args: [
+        [ARG.Any, ['f', 'fn'], true, 'Function'],
+        [ARG.Any, ['v', 'value'], false, 'Value'],
+      ],
+      callback: async ({callFunction}, {fn, value}) => callFunction(fn, value === undefined ? [] : [value]),
+    });
+  });
   const parse = source => interpreter.parse(source, {registeredCmds: vm.getRegisteredCmds()});
   const run = async (source, opts) => vm.execute(parse(source), opts);
   return {interpreter, vm, parse, run};
@@ -22,8 +47,8 @@ test.each(['__proto__', 'constructor', 'prototype'])(
       `$d = {}; $d['${key}'] *= 1`,
       `$d = {}; $d['${key}'] /= 1`,
       `{'${key}': 1}`,
-      `dict_set {} '${key}' 1`,
-      `dict_get {} '${key}'`,
+      `property_set {} '${key}' 1`,
+      `property_get {} '${key}'`,
       `$a = [{}]; $a['${key}']`,
     ]) {
       await expect(run(source)).rejects.toThrow();
@@ -61,7 +86,7 @@ test.each([
   'function spin() { for ($i = 0; true; $i++) { $i + 1 } }; silent spin',
   'function again() { again }; again',
   'function spin() { for ($i = 0; true; $i++) { $i + 1 } }; function use(x = (spin)) { return $x }; silent use',
-  'arr_map [1, 2] (function (x) { for ($i = 0; true; $i++) { $i + 1 } })',
+  'invoke (function (x) { for ($i = 0; true; $i++) { $i + 1 } }) 1',
 ])('shares the instruction budget across nested execution: %s', async source => {
   await expect(setup({maxInstructions: 200}).run(source)).rejects.toThrow('Instruction limit exceeded');
 });
@@ -197,14 +222,14 @@ test('host-delegated executions retain options and share the instruction budget'
 });
 
 test('required arguments are checked even when none are supplied', async () => {
-  await expect(setup().run('dict_get')).rejects.toThrow();
+  await expect(setup().run('property_get')).rejects.toThrow();
 });
 
 test('higher-order callbacks validate argument types and apply defaults', async () => {
   const {run} = setup();
-  await expect(run("arr_map ['wrong'] (function (x: Number) { return $x })")).rejects.toThrow();
-  await expect(run('arr_map [1, 2] (function (x, y = 10) { return $x + $y })')).resolves.toEqual([11, 12]);
-  await expect(run('$f = function () { return 7 }; arr_map [1, 2] $f')).resolves.toEqual([7, 7]);
+  await expect(run("invoke (function (x: Number) { return $x }) 'wrong'")).rejects.toThrow();
+  await expect(run('invoke (function (x, y = 10) { return $x + $y }) 1')).resolves.toBe(11);
+  await expect(run('$f = function () { return 7 }; invoke $f')).resolves.toBe(7);
 });
 
 test('higher-order calls retain unsafe confirmation', async () => {
@@ -221,7 +246,7 @@ test('higher-order calls retain unsafe confirmation', async () => {
         },
       }),
   });
-  await expect(run('arr_map [1] (callback)')).rejects.toThrow('rejected');
+  await expect(run('invoke (callback)')).rejects.toThrow('rejected');
   expect(called).toBe(false);
 });
 

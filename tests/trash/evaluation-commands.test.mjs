@@ -45,24 +45,6 @@ describe('ported OdooTerminal TraSH evaluation and command behavior', () => {
     results = await trash.eval("$mop = function ()  { return (gen -mi 4 -ma 7) }; silent print '42' + $$mop");
     expect(results.length).toBeGreaterThan(2);
     expect(results.substr(0, 2)).toBe('42');
-    const code = `
-      $nums = [1, 2, 3]
-      $nums = (arr_map $nums (function (item) { return $item * 2 }))
-      $nums = (arr_filter $nums (function (item) { return $item != 4 }))
-      arr_reduce $nums 0 (function (a, b) { return $a + $b })
-    `;
-    results = await trash.eval(code);
-    expect(results).toBe(8);
-    const code2 = `
-      $sq = function (x) { return ($x * $x) }
-      arr_map [1, 2, 3, 4, 5] $$sq
-    `;
-    results = await trash.eval(code2);
-    expect(results[0]).toBe(1);
-    expect(results[1]).toBe(4);
-    expect(results[2]).toBe(9);
-    expect(results[3]).toBe(16);
-    expect(results[4]).toBe(25);
   });
 
   test('test_trash_mix', async () => {
@@ -84,7 +66,7 @@ describe('ported OdooTerminal TraSH evaluation and command behavior', () => {
         for ($i = 0; $i < $partners['length']; $i += 1) {
           $partner = $partners[$i]
           if ($partner['is_company']) {
-            arr_append $res $partner
+            $res[$res['length']] = $partner
           }
         }
         return $res
@@ -101,7 +83,7 @@ describe('ported OdooTerminal TraSH evaluation and command behavior', () => {
         if ($i % 2 == 0) {
           continue
         }
-        arr_append $arr $i
+        $arr[$arr['length']] = $i
       }
       $arr
     `;
@@ -115,7 +97,7 @@ describe('ported OdooTerminal TraSH evaluation and command behavior', () => {
         if ($i >= 10) {
           break
         }
-        arr_append $arr $i
+        $arr[$arr['length']] = $i
       }
       $arr
     `;

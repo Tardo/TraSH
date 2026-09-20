@@ -1,11 +1,10 @@
 import {performance} from 'node:perf_hooks';
 import assert from 'node:assert/strict';
-import {Interpreter, VMachine, registerMath} from '@tardo/trash';
+import {Interpreter, VMachine} from '@tardo/trash';
 
 const interpreter = new Interpreter();
 const vm = new VMachine({processCommandJob: async () => null});
-registerMath(vm);
-const source = '$sum = 0; for ($i = 0; $i < 1000; $i++) { $sum += (abs $i) }; $sum';
+const source = '$sum = 0; for ($i = 0; $i < 1000; $i++) { $sum += $i }; $sum';
 const options = {registeredCmds: vm.getRegisteredCmds()};
 const program = interpreter.parse(source, options);
 async function benchmark() {
@@ -17,7 +16,7 @@ async function benchmark() {
         for (let i = 0; i < 1000; i++) interpreter.parse(source, options);
       },
     ],
-    ['execute (1000 host-library calls)', () => vm.execute(program)],
+    ['execute (1000 programs)', () => vm.execute(program)],
   ]) {
     for (let i = 0; i < 5; i++) await run();
     const samples = [];

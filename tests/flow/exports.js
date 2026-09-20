@@ -1,10 +1,11 @@
 // @flow strict
 
-import {FUNCTION_TYPE, Interpreter, VMachine, registerStr} from '@tardo/trash';
+import {FUNCTION_TYPE, Interpreter, VMachine} from '@tardo/trash';
 import type {CMDDef, ParserOptions, VMachineOptions} from '@tardo/trash';
 import type {CMDCallbackInternal, ProcessCommandJobOptions, Translator} from '@tardo/trash';
 import VMachineDirect from '@tardo/trash/vmachine';
-import registerMath from '@tardo/trash/core/math/__all__';
+import {ARG as PluginARG} from '@tardo/trash/plugin';
+import type {Plugin} from '@tardo/trash/plugin';
 import type {ProcessCommandJobOptions as DirectJobOptions} from '@tardo/trash/vmachine';
 
 const options: VMachineOptions = {
@@ -16,10 +17,16 @@ const command: Partial<CMDDef> = {type: FUNCTION_TYPE.Command};
 const parserOptions: ParserOptions = {registeredCmds: vmachine.getRegisteredCmds()};
 
 vmachine.registerCommand('command', command);
-registerStr(vmachine);
-interpreter.parse("str_upper 'flow'", parserOptions);
+interpreter.parse("command 'flow'", parserOptions);
 vmachine.execute(interpreter.parse('1', parserOptions));
-registerMath(new VMachineDirect(options));
+new VMachineDirect(options);
+
+export const plugin: Plugin = api => {
+  api.registerCommand('identity', {
+    args: [[PluginARG.Any, ['v', 'value'], true, 'Value to return']],
+    callback: async (_context, {value}) => value,
+  });
+};
 
 export const callback: CMDCallbackInternal = async (vm, kwargs, frame, opts) => frame.getLocal('value');
 export const translator: Translator = (key, fallback) => fallback;

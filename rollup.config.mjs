@@ -5,7 +5,7 @@ import analyze from 'rollup-plugin-analyzer';
 
 export default [
   {
-    input: ['src/js/index.mjs'],
+    input: ['src/js/index.mjs', 'src/js/plugin.mjs'],
     output: {
       sourcemap: false,
       format: 'esm',

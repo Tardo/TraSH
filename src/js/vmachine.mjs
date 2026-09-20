@@ -24,6 +24,7 @@ import {ownProperty, propertyKey} from './utils/property';
 import ExecutionStoppedError from './exceptions/execution_stopped_error';
 import type {RegisteredCMD, CMDDef, ParseInfo, CMDCallbackArgs, TokenInfo, ArgDef} from './interpreter';
 import type Instruction from './instruction';
+import type {Plugin} from './plugin';
 
 export type ProcessCommandJobOptions = {
   cmdRaw: string,
@@ -107,11 +108,28 @@ export default class VMachine {
     return this.#registeredCmds[cmd];
   }
 
+  use(plugin: Plugin): void {
+    plugin({
+      registerCommand: (name, command) => {
+        this.registerCommand(name, {
+          ...command,
+          type: FUNCTION_TYPE.Internal,
+          callback: async (vmachine: VMachine, kwargs: CMDCallbackArgs, frame: Frame, opts: EvalOptions) =>
+            command.callback(
+              {
+                callFunction: (fn, values) => vmachine.callFunctionValue(fn, values, frame, opts),
+                propertyKey,
+              },
+              kwargs,
+            ),
+        });
+      },
+    });
+  }
+
   // Invoke a function value (e.g. a `$$var` reference or an inline anonymous
-  // function) with positional arguments. Used by Internal functions that
-  // accept callbacks (arr_map, arr_filter, arr_reduce...). A fresh Frame is
-  // used so the caller's own frame (still needed by the outer execute loop)
-  // is never mutated.
+  // function) with positional arguments. A fresh Frame is used so the caller's
+  // own frame (still needed by the outer execute loop) is never mutated.
   async callFunctionValue(fn: mixed, values: $ReadOnlyArray<mixed>, frame: Frame, opts: EvalOptions): Promise<mixed> {
     if (fn === null || typeof fn !== 'object' || typeof fn.callback !== 'function') {
       throw new InvalidValueError(fn);
@@ -460,7 +478,7 @@ export default class VMachine {
                 ) {
                   // When $$var fires at argument position (no args on the frame yet) and the
                   // referenced function expects arguments, treat it as a reference pass so
-                  // higher-order patterns like `arr_map [1,2,3] $$sq` work correctly.
+                  // Higher-order plugin callbacks receive the current execution options.
                   // Zero-arg functions ($$RMOD, $$mop, etc.) are still called immediately.
                   if (frame.stack.length === 1 && frame.args.length === 0) {
                     // $FlowFixMe[incompatible-use]

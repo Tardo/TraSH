@@ -48,14 +48,14 @@ own `Interpreter`, not instruction objects supplied by clients.
 ## Properties and host objects
 
 - Script property keys must be strings or numbers.
-- `__proto__`, `constructor` and `prototype` are rejected in subscripts,
-  dictionary literals, `dict_get` and `dict_set`.
+- `__proto__`, `constructor` and `prototype` are rejected in subscripts and
+  dictionary literals.
 - Reads use **own properties only**. Missing properties return `undefined`.
 - Array and string indexes and `length` remain available. Nonnumeric array
   lookups can project own properties from its elements; null/missing elements
   contribute `undefined`.
-- Arrays and dictionaries are passed by reference. Assignment, `dict_set`,
-  `arr_append` and similar mutators can change objects returned by the host.
+- Arrays and dictionaries are passed by reference. Assignments can change objects
+  returned by the host.
   Clone data before exposing it if that mutation is unwanted.
 - Host extensions are trusted code. Expose plain data rather than powerful
   objects, accessors or proxies; this boundary is not an object membrane.

@@ -7,9 +7,10 @@ import path from 'node:path';
 const root = path.resolve(import.meta.dirname, '../..');
 const consumer = mkdtempSync(path.join(tmpdir(), 'trash-flow-'));
 try {
-  const [archive] = JSON.parse(
+  const packed = JSON.parse(
     execFileSync('npm', ['pack', '--json', '--pack-destination', consumer], {cwd: root, encoding: 'utf8'}),
   );
+  const archive = Array.isArray(packed) ? packed[0] : packed.files ? packed : Object.values(packed)[0];
   assert(archive.files.some(file => file.path === 'dist/index.mjs.flow'));
   assert(!archive.files.some(file => file.path.startsWith('flow-typed/')));
   writeFileSync(path.join(consumer, 'package.json'), JSON.stringify({private: true, type: 'module'}));

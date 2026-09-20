@@ -1,8 +1,7 @@
 # Contributing
 
 Thank you for improving TraSH. Contributions should be small, test the behavior
-they change, and keep the parser, virtual machine, and standard library
-consistent.
+they change, and keep the parser and virtual machine consistent.
 
 ## Set up the environment
 
@@ -24,8 +23,8 @@ full test suite.
 | `src/js/parser.mjs` | AST construction. |
 | `src/js/codegen.mjs` | AST-to-instruction compilation. |
 | `src/js/vmachine.mjs` | Execution, variables, and function invocation. |
-| `src/js/core/` | Standard library, grouped by domain. |
-| `tests/trash/` | Syntax, control-flow, command, and standard-library tests. |
+| `src/js/plugin.mjs` | Public plugin contract. |
+| `tests/trash/` | Syntax, control-flow, and command tests. |
 | `dist/` | Rollup output; do not edit it manually. |
 
 Production code uses strict Flow and ESM modules. Every production file starts
@@ -48,35 +47,6 @@ pnpm run dev:flow:check
 
 `pnpm test` rebuilds `dist/` and runs Jest. Use `pnpm run build` to build
 without tests. During development, use `pnpm run dev:rollup:watch`.
-
-## Add a standard-library function
-
-1. Create `src/js/core/<group>/<name>.mjs`.
-2. Return a `Partial<CMDDef>` with `type: FUNCTION_TYPE.Internal`, arguments,
-   and an asynchronous callback.
-3. Register it in `src/js/core/<group>/__all__.mjs`.
-4. Add a test in `tests/trash/stdlib.test.mjs`.
-5. Document its signature in [functions.md](functions.md).
-
-Minimal example:
-
-```js
-// @flow strict
-import {ARG} from '../../constants';
-import {FUNCTION_TYPE} from '../../function';
-
-export default function () {
-  return {
-    type: FUNCTION_TYPE.Internal,
-    args: [[ARG.String, ['v', 'value'], true, 'Value to normalize']],
-    callback: async (_vmachine, {value}) => value.trim(),
-  };
-}
-```
-
-Do not add another global registration point when an existing group fits the
-function. Keep functions pure when possible, and clearly document functions
-that mutate input arrays or dictionaries.
 
 ## Language changes
 

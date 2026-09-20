@@ -54,33 +54,36 @@ greeting 'Ada'
 ```
 
 An anonymous function can be stored in a variable. Use `$` to pass the function
-value without calling it, for example to a higher-order function:
+value without calling it, for example to a plugin callback:
 
 ```trash
 $double = function (value: Number) {
   return $value * 2
 }
 
-arr_map [1, 2, 3] $double
 ```
 
 Function parameter types are `String`, `Number`, `Dictionary`, `Flag`, `Any`,
 and `List`. Use `|` for a union, such as `String|Number`. A parameter without a
 type annotation is `Any`.
 
-## 2. Internal JavaScript functions
+## 2. Plugins
 
-An `Internal` function runs directly in the virtual machine. Use it to expose a
-JavaScript capability that does not need the host command layer.
+A plugin runs internal functions without access to the virtual machine, frames,
+or execution options. Use it to expose JavaScript capabilities that do not need
+the host command layer.
 
 ```js
-import {ARG, FUNCTION_TYPE} from '@tardo/trash';
+import {ARG} from '@tardo/trash/plugin';
 
-vmachine.registerCommand('slugify', {
-  type: FUNCTION_TYPE.Internal,
-  args: [[ARG.String, ['v', 'value'], true, 'Text to transform']],
-  callback: async (_vmachine, {value}) => value.trim().toLowerCase().replaceAll(' ', '-'),
-});
+const registerSlugify = api => {
+  api.registerCommand('slugify', {
+    args: [[ARG.String, ['v', 'value'], true, 'Text to transform']],
+    callback: async (_context, {value}) => value.trim().toLowerCase().replaceAll(' ', '-'),
+  });
+};
+
+vmachine.use(registerSlugify);
 
 await evaluate("slugify ' Hello TraSH '"); // 'hello-trash'
 ```
@@ -88,30 +91,34 @@ await evaluate("slugify ' Hello TraSH '"); // 'hello-trash'
 The callback signature is:
 
 ```js
-async (vmachine, kwargs, frame, options) => result
+async (context, kwargs) => result
 ```
 
 - `kwargs` holds validated and normalized arguments under their long names. A
   hyphen in an argument name becomes an underscore.
-- `frame` and `options` are needed by higher-order functions. Use
-  `vmachine.callFunctionValue(fn, values, frame, options)` to call a TraSH
-  function received as an argument.
+- Use `context.callFunction(fn, values)` to call a TraSH function received as an
+  argument. It retains the current execution controls and error policy.
+- Use `context.propertyKey(key)` before reading or writing a script-provided
+  dictionary key.
 - The result, including a `Promise`, is returned to the script.
 
 This internal function consumes a callback:
 
 ```js
-vmachine.registerCommand('twice', {
-  type: FUNCTION_TYPE.Internal,
-  args: [
-    [ARG.Any, ['v', 'value'], true, 'Initial value'],
-    [ARG.Any, ['f', 'transform'], true, 'TraSH function'],
-  ],
-  callback: async (vmachine, {value, transform}, frame, options) => {
-    const first = await vmachine.callFunctionValue(transform, [value], frame, options);
-    return vmachine.callFunctionValue(transform, [first], frame, options);
-  },
-});
+const registerTwice = api => {
+  api.registerCommand('twice', {
+    args: [
+      [ARG.Any, ['v', 'value'], true, 'Initial value'],
+      [ARG.Any, ['f', 'transform'], true, 'TraSH function'],
+    ],
+    callback: async ({callFunction}, {value, transform}) => {
+      const first = await callFunction(transform, [value]);
+      return callFunction(transform, [first]);
+    },
+  });
+};
+
+vmachine.use(registerTwice);
 
 await evaluate(`
   $increment = function (value: Number) { return $value + 1 }
@@ -164,8 +171,7 @@ validation and authorization before producing side effects.
 
 Mark an internal function or command as `unsafe: true` when it requires an
 explicit confirmation. When the virtual machine receives `confirmUnsafe`, it
-calls it before execution; the standard-library `fetch` function already uses
-this protection.
+calls it before execution.
 
 ```js
 const vmachine = new VMachine({
@@ -218,75 +224,6 @@ when needed.
 
 Use letters, digits, and underscores for command names, such as `save_note`.
 Hyphens belong to argument flags, not command names.
-
-## Standard library
-
-Register each group with the export shown in the README. Bracketed arguments
-are optional. Functions that mutate their input say so explicitly.
-
-### Arrays
-
-| Function | Signature | Result |
-| --- | --- | --- |
-| `arr_clone` | `arr_clone arr` | Shallow copy of `arr`. |
-| `arr_append` | `arr_append arr item` | Appends `item` and mutates `arr`. |
-| `arr_prepend` | `arr_prepend arr item` | Prepends `item` and mutates `arr`. |
-| `arr_join` | `arr_join arr [sep]` | Joins elements with `sep`, defaulting to `''`. |
-| `arr_map` | `arr_map arr mapper` | New array from `mapper(item)`. |
-| `arr_filter` | `arr_filter arr filter` | New array whose elements make `filter(item)` true. |
-| `arr_reduce` | `arr_reduce arr initial reducer` | Accumulator from `reducer(accumulator, item)`. |
-
-### Dictionaries
-
-| Function | Signature | Result |
-| --- | --- | --- |
-| `dict_keys` | `dict_keys dict` | Dictionary keys. |
-| `dict_values` | `dict_values dict` | Dictionary values. |
-| `dict_entries` | `dict_entries dict` | `[key, value]` pairs. |
-| `dict_has` | `dict_has dict key` | Whether an own key exists. |
-| `dict_get` | `dict_get dict key [default]` | Value or `default` when absent. |
-| `dict_set` | `dict_set dict key value` | Assigns and mutates `dict`. |
-| `dict_remove` | `dict_remove dict key` | Deletes the key and mutates `dict`. |
-| `dict_merge` | `dict_merge dict other` | New dictionary; `other` wins. |
-| `dict_clone` | `dict_clone dict` | Shallow copy of `dict`. |
-| `dict_size` | `dict_size dict` | Number of own keys. |
-
-### Strings
-
-| Function | Signature | Result |
-| --- | --- | --- |
-| `str_split` | `str_split str [delim]` | Splits `str`; `delim` defaults to `''`. |
-| `str_upper` | `str_upper str` | Converts to uppercase. |
-| `str_lower` | `str_lower str` | Converts to lowercase. |
-| `str_trim` | `str_trim str` | Removes leading and trailing whitespace. |
-| `str_replace` | `str_replace str search replacement [-a]` | Replaces the first match, or all matches with `-a`. |
-| `str_slice` | `str_slice str begin [end]` | Extracts from `begin` to exclusive `end`; accepts negative indexes. |
-| `str_includes` | `str_includes str needle` | Checks for a substring. |
-| `str_starts` | `str_starts str prefix` | Checks the prefix. |
-| `str_ends` | `str_ends str suffix` | Checks the suffix. |
-
-### Math, encoding, and time
-
-| Function | Signature | Result |
-| --- | --- | --- |
-| `floor` | `floor num` | Rounds down. |
-| `fixed` | `fixed num [decimals]` | Calls `toFixed(decimals)` and truncates the result to an integer. |
-| `rand` | `rand min max` | Inclusive random integer between the limits. |
-| `abs` | `abs num` | Absolute value. |
-| `pow` | `pow base exponent` | Exponentiation. |
-| `encode` | `encode value -m b64` | Base64-encodes a value. |
-| `decode` | `decode value -m b64` | Base64-decodes a value. |
-| `sleep` | `sleep [-t milliseconds]` | Asynchronous delay. |
-| `pnow` | `pnow` | High-resolution timestamp in milliseconds. |
-
-### Network
-
-| Function | Signature | Result |
-| --- | --- | --- |
-| `fetch` | `fetch url [-o options] [-t timeout]` | Runs `fetch`; returns the response or `null` on timeout. |
-
-`fetch` is marked `unsafe`. Its options are the native `fetch` options object,
-and `timeout` is in milliseconds.
 
 ## Useful syntax
 

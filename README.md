@@ -5,8 +5,7 @@
 </h1>
 
 TraSH is a scripting language for embedding expressions and commands in a JavaScript application. Scripts run through
-its own parser and virtual machine — **no JavaScript `eval()`**. It includes a standard library for arrays,
-dictionaries, strings, math, encoding, time, and HTTP requests.
+its own parser and virtual machine — **no JavaScript `eval()`**.
 
 Execution has a configurable instruction budget and supports `AbortSignal` cancellation. See the
 [runtime contract](docs/runtime.md) for property isolation, scope rules, compatibility changes, and the limits of these
@@ -20,6 +19,13 @@ npm install @tardo/trash
 
 The package is ESM, so consumers must use `import` or `.mjs` files.
 
+The optional standard-library plugins are available separately in
+[`@tardo/trash-stdlib`](https://github.com/Tardo/TraSH-stdlib):
+
+```sh
+npm install @tardo/trash-stdlib
+```
+
 ## Flow
 
 The package includes `.mjs.flow` files generated from its typed source during the build. Flow discovers them
@@ -32,9 +38,8 @@ import type {ProcessCommandJobOptions} from '@tardo/trash/vmachine';
 
 ## Complete example
 
-The following program registers the whole standard library, declares a TraSH function, and delegates the `notify`
-command to the JavaScript host. It configures an instruction budget and timer-driven cancellation. Save it as
-`example.mjs` and run `node example.mjs`.
+The following program declares a TraSH function and delegates the `notify` command to the JavaScript host. It configures
+an instruction budget and timer-driven cancellation. Save it as `example.mjs` and run `node example.mjs`.
 
 ```js
 import {
@@ -42,13 +47,6 @@ import {
   FUNCTION_TYPE,
   Interpreter,
   VMachine,
-  registerArr,
-  registerDict,
-  registerEnde,
-  registerMath,
-  registerNet,
-  registerStr,
-  registerTime,
 } from '@tardo/trash';
 
 const interpreter = new Interpreter();
@@ -62,10 +60,6 @@ const vmachine = new VMachine({
   },
 });
 
-[registerArr, registerDict, registerEnde, registerMath, registerNet, registerStr, registerTime].forEach(register =>
-  register(vmachine),
-);
-
 vmachine.registerCommand('notify', {
   type: FUNCTION_TYPE.Command,
   args: [
@@ -75,15 +69,10 @@ vmachine.registerCommand('notify', {
 });
 
 const source = `
-  $square = function (value: Number) {
-    return $value * $value
+  $total = 0
+  for ($value in [1, 2, 3, 4]) {
+    $total += $value * $value
   }
-
-  $values = [1, 2, 3, 4]
-  $squares = (arr_map $values $square)
-  $total = (arr_reduce $squares 0 (function (sum, value) {
-    return $sum + $value
-  }))
   notify -m ('Total of squares: ' + $total) -r 2
 `;
 
@@ -123,12 +112,13 @@ setTranslator((key, fallback, values) => myTranslator.translate(key, {fallback, 
 
 ```trash
 $user = {name: 'Ada', scores: [10, 8, 9]}
-$total = (arr_reduce $user['scores'] 0 (function (sum, score) {
-  return $sum + $score
-}))
+$total = 0
+for ($score in $user['scores']) {
+  $total += $score
+}
 
 if ($total >= 25) {
-  return (str_upper ('passed: ' + $user['name']))
+  return 'passed: ' + $user['name']
 }
 return 'pending'
 ```
@@ -136,35 +126,35 @@ return 'pending'
 - Variables begin with `$`; `$name` reads a value, including a function. `$$name` invokes a function; see the
   [compatibility rules](docs/runtime.md#variables-and-functions) for its use in argument position.
 - Calls accept positional arguments, `-short` arguments, and `--long` arguments.
-- Wrap a call that is part of an expression in parentheses: `(dict_get $user 'name')`.
+- Wrap a command call that is part of an expression in parentheses.
 - `silent command ...` returns `null` if its execution callback throws, unless execution uses `throwSilentErrors: true`.
   Argument validation and execution-control errors still propagate; see the
   [error rules](docs/runtime.md#syntax-and-errors).
 
-## Standard library
+## Plugins
 
-Register only the modules you need, or register them all as in the complete example.
+Plugins register internal commands through a small API instead of receiving the runtime. They can define commands,
+validate arguments with `ARG`, invoke script callbacks, and validate safe dictionary keys.
 
-| Register       | Functions                                                                                                                              |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `registerArr`  | `arr_clone`, `arr_append`, `arr_prepend`, `arr_join`, `arr_map`, `arr_filter`, `arr_reduce`                                            |
-| `registerDict` | `dict_keys`, `dict_values`, `dict_entries`, `dict_has`, `dict_get`, `dict_set`, `dict_remove`, `dict_merge`, `dict_clone`, `dict_size` |
-| `registerStr`  | `str_split`, `str_upper`, `str_lower`, `str_trim`, `str_replace`, `str_slice`, `str_includes`, `str_starts`, `str_ends`                |
-| `registerMath` | `floor`, `fixed`, `rand`, `abs`, `pow`                                                                                                 |
-| `registerEnde` | `encode`, `decode`                                                                                                                     |
-| `registerTime` | `sleep`, `pnow`                                                                                                                        |
-| `registerNet`  | `fetch`                                                                                                                                |
+```js
+import {ARG} from '@tardo/trash/plugin';
 
-See [docs/functions.md](docs/functions.md) for function signatures, side effects, and instructions for extending the
-language.
+const registerDouble = api => {
+  api.registerCommand('double', {
+    args: [[ARG.Number, ['v', 'value'], true, 'Value to double']],
+    callback: async (_context, {value}) => value * 2,
+  });
+};
+
+vmachine.use(registerDouble);
+```
 
 ## Deep imports
 
-Deep imports are supported when registering the entire package would be unnecessary:
+Deep imports are supported for individual core modules:
 
 ```js
 import VMachine from '@tardo/trash/vmachine';
-import registerMath from '@tardo/trash/core/math/__all__';
 ```
 
 ## Development and contributing

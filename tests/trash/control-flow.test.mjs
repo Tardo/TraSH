@@ -23,8 +23,8 @@ describe('ported OdooTerminal TraSH control-flow behavior', () => {
     expect(results[1]).toBe(1);
     results = await trash.eval('$obj = {a: 10}; $obj["a"]++; $obj["a"]');
     expect(results).toBe(11);
-    results = await trash.eval("str_replace -s 'hello world' -f 'o' -r '0' --all");
-    expect(results).toBe('hell0 w0rld');
+    results = await trash.eval('search res.partner --all');
+    expect(results.length).toBe(4);
     results = await trash.eval('$i = 5; $a = $i++; [$a, $i]');
     expect(results[0]).toBe(5);
     expect(results[1]).toBe(6);

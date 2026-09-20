@@ -23,13 +23,7 @@ export type {
   TokenInfo,
 } from './interpreter';
 export type {EvalOptions, ProcessCommandJobCallback, ProcessCommandJobOptions, VMachineOptions} from './vmachine';
+export type {Plugin, PluginApi, PluginArguments, PluginCallback, PluginCommand, PluginContext} from './plugin';
 export * from './translation';
 export * from './argument';
 export * from './constants';
-export {default as registerArr} from './core/arr/__all__';
-export {default as registerDict} from './core/dict/__all__';
-export {default as registerEnde} from './core/ende/__all__';
-export {default as registerMath} from './core/math/__all__';
-export {default as registerNet} from './core/net/__all__';
-export {default as registerStr} from './core/str/__all__';
-export {default as registerTime} from './core/time/__all__';

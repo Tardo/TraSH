@@ -1,17 +1,4 @@
-import {
-  ARG,
-  FUNCTION_TYPE,
-  Frame,
-  Interpreter,
-  VMachine,
-  registerArr,
-  registerDict,
-  registerEnde,
-  registerMath,
-  registerNet,
-  registerStr,
-  registerTime,
-} from '@tardo/trash';
+import {ARG, FUNCTION_TYPE, Frame, Interpreter, VMachine} from '@tardo/trash';
 
 const PARTNERS = [
   {id: 1, name: 'Ada', is_company: true},
@@ -161,9 +148,6 @@ export function makeTrash() {
     processCommandJob: async () => null,
     silent: false,
   });
-  [registerArr, registerDict, registerEnde, registerMath, registerNet, registerStr, registerTime].forEach(register =>
-    register(vmachine),
-  );
   registerFixtures(vmachine);
 
   const execute = (source, options = {}, isolatedFrame = false, all = false) =>

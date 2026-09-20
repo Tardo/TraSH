@@ -1,7 +1,7 @@
 {
   "name": "@tardo/trash",
-  "description": "Lightweight DSL for expressive scripting without eval (extracted from OdooTerminal)",
-  "version": "1.2.0",
+  "description": "Lightweight DSL for expressive scripting without 'js native eval' (extracted from OdooTerminal)",
+  "version": "2.0.0",
   "type": "module",
   "keywords": [
     "trash",

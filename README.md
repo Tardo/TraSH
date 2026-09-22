@@ -1,15 +1,38 @@
 <h1 align="center">
-  <div>TraSH</div>
+  <div>TraSH: Capability-based application scripting</div>
 
 [![Tests](https://github.com/Tardo/TraSH/actions/workflows/tests.yml/badge.svg)](https://github.com/Tardo/TraSH/actions/workflows/tests.yml)
 </h1>
 
-TraSH is a scripting language for embedding expressions and commands in a JavaScript application. Scripts run through
-its own parser and virtual machine — **no JavaScript `eval()`**.
+TraSH is a lightweight, capability-based scripting language for adding programmable workflows to JavaScript
+applications. The host defines the commands a script can use, validates their arguments, and performs their side
+effects. Scripts combine those capabilities with expressions, variables, functions, and control flow.
+
+Scripts run through TraSH's parser and virtual machine — **no JavaScript `eval()`**. TraSH was extracted from
+[OdooTerminal](https://github.com/Tardo/OdooTerminal), where its command-oriented scripting model was developed.
 
 Execution has a configurable instruction budget and supports `AbortSignal` cancellation. See the
 [runtime contract](docs/runtime.md) for property isolation, scope rules, compatibility changes, and the limits of these
 controls.
+
+## Why TraSH?
+
+Use TraSH when an application needs more than expressions or data transformations, but should not expose arbitrary
+JavaScript. It is a middle ground between expression engines and full JavaScript runtimes:
+
+| If you need                                                      | Use                                                 |
+| ---------------------------------------------------------------- | --------------------------------------------------- |
+| Rules, filters, or JSON transformations                          | An expression engine such as CEL, JEXL, or JSONata. |
+| User-defined workflows composed from application commands        | TraSH.                                              |
+| Arbitrary JavaScript or a hardened JavaScript isolation boundary | A dedicated JavaScript runtime or sandbox.          |
+
+This model fits user automations, administrator rules, and agent-generated workflows: the application owns the
+vocabulary (`search`, `create`, `notify`, and so on), while scripts own the logic that composes it.
+
+TraSH does not grant direct access to Node.js, the DOM, network APIs, or host globals. Its instruction budget and
+cancellation are cooperative execution controls, not a wall-clock or memory sandbox. For hostile scripts, run parsing
+and execution in a terminable worker or process; see the
+[runtime contract](docs/runtime.md#execution-limits-and-cancellation).
 
 ## Installation
 
@@ -73,7 +96,7 @@ const source = `
   for ($value in [1, 2, 3, 4]) {
     $total += $value * $value
   }
-  notify -m ('Total of squares: ' + $total) -r 2
+  notify -m 'Total of squares: ' + $total -r 2
 `;
 
 const program = interpreter.parse(source, {

@@ -11,7 +11,7 @@ import type {ArgDef, ParseInfo, ParserOptions, RegisteredCMD, TokenInfo} from '.
 
 export type ParserServices = {
   tokenize: (data: string, options: ParserOptions) => Array<TokenInfo>,
-  compile: (data: string, options: ParserOptions) => ParseInfo,
+  compile: (data: string, options: ParserOptions, nestingDepth: number) => ParseInfo,
   getCanonicalCommandName: (cmd_name: string, registered_cmds: RegisteredCMD) => string | void,
 };
 
@@ -61,10 +61,14 @@ export default class ASTParser {
   #services: ParserServices;
   #options: ParserOptions;
   #units: Array<ASTUnit> = [];
+  #nestingDepth: number;
+  #maxNestingDepth: number;
 
-  constructor(services: ParserServices, options: ParserOptions) {
+  constructor(services: ParserServices, options: ParserOptions, nestingDepth: number, maxNestingDepth: number) {
     this.#services = services;
     this.#options = options;
+    this.#nestingDepth = nestingDepth;
+    this.#maxNestingDepth = maxNestingDepth;
   }
 
   getUnits(): Array<ASTUnit> {
@@ -97,8 +101,16 @@ export default class ASTParser {
   }
 
   #subUnit(content: string, offset: number, uopts: UnitOptions, delimiter?: string): ASTUnit {
+    if (this.#nestingDepth >= this.#maxNestingDepth) {
+      throw new RangeError('Source exceeds maxNestingDepth');
+    }
     const tokens = this.#subTokens(content, offset, {isData: uopts.isData === true, delimiter});
-    return this.#parseUnit(tokens, uopts);
+    ++this.#nestingDepth;
+    try {
+      return this.#parseUnit(tokens, uopts);
+    } finally {
+      --this.#nestingDepth;
+    }
   }
 
   #parseUnit(tokens: Array<TokenInfo>, uopts: UnitOptions): ASTUnit {
@@ -485,7 +497,7 @@ export default class ASTParser {
       this.#throwToken(fun_token);
     }
     ++cursor.pos;
-    const fun_code = this.#services.compile(token.value.trim(), this.#options);
+    const fun_code = this.#services.compile(token.value.trim(), this.#options, this.#nestingDepth + 1);
     return {
       node: typeof fun_name === 'undefined' ? NODE.AnonFunction : NODE.FunctionDef,
       token: fun_token,
@@ -507,7 +519,7 @@ export default class ASTParser {
       vardef = vardef && vardef.trim();
       let cdefault: mixed;
       if (vardef) {
-        cdefault = this.#services.compile(vardef, this.#options);
+        cdefault = this.#services.compile(vardef, this.#options, this.#nestingDepth + 1);
       }
       let [varname, vartype] = varass.split(':');
       varname = varname && varname.trim();

@@ -153,6 +153,17 @@ test('host commands receive the execution cancellation signal', async () => {
   await expect(run('check_signal', {signal: controller.signal})).resolves.toBe(true);
 });
 
+test('plugins receive the execution cancellation signal', async () => {
+  const controller = new AbortController();
+  const {run, vm} = setup();
+  vm.use(api => {
+    api.registerCommand('check_signal', {
+      callback: async ({signal}) => signal === controller.signal,
+    });
+  });
+  await expect(run('check_signal', {signal: controller.signal})).resolves.toBe(true);
+});
+
 test('silent suppresses host callback errors consistently', async () => {
   const {run, vm} = setup({
     processCommandJob: async () => {
@@ -232,22 +243,82 @@ test('higher-order callbacks validate argument types and apply defaults', async 
   await expect(run('$f = function () { return 7 }; invoke $f')).resolves.toBe(7);
 });
 
-test('higher-order calls retain unsafe confirmation', async () => {
+test('function handles retain unsafe confirmation after mutation', async () => {
   let called = false;
   const {run, vm} = setup({confirmUnsafe: async () => false});
+  const privileged = vm.registerCommand('privileged', {
+    type: FUNCTION_TYPE.Internal,
+    unsafe: true,
+    callback: async () => {
+      called = true;
+    },
+  });
   vm.registerCommand('callback', {
     type: FUNCTION_TYPE.Internal,
-    callback: async () =>
-      VMachine.makeCommand({
-        type: FUNCTION_TYPE.Internal,
-        unsafe: true,
-        callback: async () => {
-          called = true;
-        },
-      }),
+    callback: async () => privileged,
   });
-  await expect(run('invoke (callback)')).rejects.toThrow('rejected');
+  await expect(run("$callback = (callback); $callback['unsafe'] = false; invoke $callback")).rejects.toThrow(
+    'rejected',
+  );
   expect(called).toBe(false);
+});
+
+test('rejects forged function descriptors', async () => {
+  const {run, vm} = setup();
+  const callback = vm.registerCommand('callback', {
+    type: FUNCTION_TYPE.Internal,
+    callback: async () => 7,
+  });
+  vm.registerCommand('function_value', {
+    type: FUNCTION_TYPE.Internal,
+    callback: async () => callback,
+  });
+  await expect(run("$fn = (function_value); invoke {callback: $fn['callback'], args: [], type: 2}")).rejects.toThrow(
+    'Invalid value',
+  );
+});
+
+test('preserves mutable and non-cloneable host command results', async () => {
+  const record = {profile: {name: 'Ada'}};
+  const callback = () => record;
+  const {run, vm} = setup({processCommandJob: async ({cmdName}) => (cmdName === 'record' ? record : callback)});
+  vm.registerCommand('record', {});
+  vm.registerCommand('callback', {});
+  vm.use(api => {
+    api.registerCommand('plugin_callback', {callback: async () => callback});
+  });
+  await expect(run('record')).resolves.toBe(record);
+  await expect(
+    run("$record = (record); $record['profile']['name'] = 'Grace'; $record['profile']['name']"),
+  ).resolves.toBe('Grace');
+  expect(record.profile.name).toBe('Grace');
+  await expect(run('callback')).resolves.toBe(callback);
+  await expect(run('plugin_callback')).resolves.toBe(callback);
+});
+
+test('does not let script functions replace registered capabilities', async () => {
+  let calls = 0;
+  const {run, vm} = setup();
+  vm.registerCommand('protected', {type: FUNCTION_TYPE.Internal, callback: async () => ++calls});
+  await expect(run('function protected() { return 7 }')).rejects.toThrow(
+    "Cannot replace registered command 'protected'",
+  );
+  await expect(run('protected')).resolves.toBe(1);
+});
+
+test('enforces source, nesting, collection and string limits', async () => {
+  const {interpreter, vm} = setup({maxCollectionLength: 4, maxStringLength: 4});
+  const options = {registeredCmds: vm.getRegisteredCmds()};
+  expect(() => interpreter.parse('x'.repeat(11), {...options, maxSourceLength: 10})).toThrow(
+    'Source exceeds maxSourceLength',
+  );
+  expect(() => interpreter.parse(`${'['.repeat(4)}0${']'.repeat(4)}`, {...options, maxNestingDepth: 3})).toThrow(
+    'Source exceeds maxNestingDepth',
+  );
+  await expect(vm.execute(interpreter.parse("$items = []; $items['length'] = 5", options))).rejects.toThrow(
+    'maxCollectionLength',
+  );
+  await expect(vm.execute(interpreter.parse("'abc' + 'de'", options))).rejects.toThrow('maxStringLength');
 });
 
 test('functions resolve the calling frame and updates reach existing outer variables', async () => {

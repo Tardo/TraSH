@@ -96,6 +96,8 @@ export type RegisteredCMD = {[string]: CMDDef};
 
 export type ParserOptions = {
   registeredCmds?: RegisteredCMD,
+  maxSourceLength?: number,
+  maxNestingDepth?: number,
   math?: boolean,
   isData?: boolean,
   offset?: number,
@@ -513,16 +515,33 @@ export default class Interpreter {
    * @param {String} data
    * @returns {Object}
    */
-  parse(data: string, options: ParserOptions, level: number = 0): ParseInfo {
+  parse(data: string, options: ParserOptions, level: number = 0, nestingDepth: number = 0): ParseInfo {
+    const maxSourceLength = options.maxSourceLength ?? 1_000_000;
+    const maxNestingDepth = options.maxNestingDepth ?? 100;
+    if (!Number.isSafeInteger(maxSourceLength) || maxSourceLength < 1) {
+      throw new RangeError('maxSourceLength must be a positive safe integer');
+    }
+    if (!Number.isSafeInteger(maxNestingDepth) || maxNestingDepth < 1) {
+      throw new RangeError('maxNestingDepth must be a positive safe integer');
+    }
+    if (data.length > maxSourceLength) {
+      throw new RangeError('Source exceeds maxSourceLength');
+    }
+    if (nestingDepth > maxNestingDepth) {
+      throw new RangeError('Source exceeds maxNestingDepth');
+    }
     const tokens = this.tokenize(data, options);
     const ast_parser = new ASTParser(
       {
         tokenize: (sub_data: string, sub_options: ParserOptions) => this.tokenize(sub_data, sub_options),
-        compile: (sub_data: string, sub_options: ParserOptions) => this.parse(sub_data, sub_options),
+        compile: (sub_data: string, sub_options: ParserOptions, subNestingDepth: number) =>
+          this.parse(sub_data, sub_options, 0, subNestingDepth),
         getCanonicalCommandName: (cmd_name: string, registered_cmds: RegisteredCMD) =>
           this.getCanonicalCommandName(cmd_name, registered_cmds),
       },
       options,
+      nestingDepth,
+      maxNestingDepth,
     );
     const root = ast_parser.parse(tokens);
     const codegen = new CodeGen();

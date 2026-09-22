@@ -170,7 +170,7 @@ export async function validateAndFormatArguments(
     const arg_long_name = arg_info.names.long;
     const s_arg_long_name = arg_long_name.replaceAll('-', '_');
     if (!is_default && !checkArgumentValueType(arg_value, arg_info.type)) {
-      const value_type = isFalsy(arg_value) ? 'null/undefined' : arg_value.constructor?.name;
+      const value_type = isFalsy(arg_value) ? 'null/undefined' : Array.isArray(arg_value) ? 'Array' : typeof arg_value;
       throw new Error(
         i18n.t(
           'trash.argument.invalid',

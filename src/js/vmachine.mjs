@@ -26,6 +26,8 @@ import type {RegisteredCMD, CMDDef, ParseInfo, CMDCallbackArgs, TokenInfo, ArgDe
 import type Instruction from './instruction';
 import type {Plugin} from './plugin';
 
+type FunctionHandle = {[string]: mixed};
+
 export type ProcessCommandJobOptions = {
   cmdRaw: string,
   cmdName: string,
@@ -42,6 +44,8 @@ export type VMachineOptions = {
   // false to reject (execution aborts).
   confirmUnsafe?: (cmdName: string, cmdRaw: string) => Promise<boolean>,
   maxInstructions?: number,
+  maxCollectionLength?: number,
+  maxStringLength?: number,
 };
 
 export type EvalOptions = {
@@ -68,9 +72,19 @@ export default class VMachine {
   #registeredCmds: RegisteredCMD = Object.setPrototypeOf({}, null);
   #globals: {[string]: mixed} = Object.setPrototypeOf({}, null);
   #executions: WeakMap<EvalOptions, {remaining: number, ticks: number}> = new WeakMap();
+  #functionHandles: WeakMap<{...}, FunctionHandle> = new WeakMap();
+  #functionValues: WeakMap<{...}, CMDDef> = new WeakMap();
   options: VMachineOptions;
 
   constructor(options: VMachineOptions) {
+    for (const [name, value] of [
+      ['maxCollectionLength', options.maxCollectionLength],
+      ['maxStringLength', options.maxStringLength],
+    ]) {
+      if (typeof value !== 'undefined' && (!Number.isSafeInteger(value) || value < 1)) {
+        throw new RangeError(`${name} must be a positive safe integer`);
+      }
+    }
     this.options = options;
   }
 
@@ -104,8 +118,89 @@ export default class VMachine {
   }
 
   registerCommand(cmd: string, cmd_def: Partial<CMDDef>): CMDDef {
-    this.#registeredCmds[cmd] = VMachine.makeCommand(cmd_def);
+    const definition = VMachine.makeCommand(cmd_def);
+    this.#registeredCmds[cmd] = definition;
+    this.#functionHandle(definition);
     return this.#registeredCmds[cmd];
+  }
+
+  #functionHandle(definition: CMDDef): FunctionHandle {
+    let handle = this.#functionHandles.get(definition);
+    if (typeof handle === 'undefined') {
+      handle = {};
+      this.#functionHandles.set(definition, handle);
+      // Keep invocation metadata private. Script-visible handles can be changed
+      // freely without changing the capability they represent.
+      const args = definition.args.map(arg => {
+        const copy = [...arg];
+        copy[1] = [...arg[1]];
+        if (Array.isArray(arg[5])) copy[5] = [...arg[5]];
+        return copy;
+      });
+      this.#functionValues.set(handle, {...definition, args});
+    }
+    return handle;
+  }
+
+  #functionDefinition(value: mixed): CMDDef | void {
+    if (value === null || typeof value !== 'object') return undefined;
+    return this.#functionValues.get(value);
+  }
+
+  #functionHandleFor(value: mixed): FunctionHandle | void {
+    if (value === null || typeof value !== 'object') return undefined;
+    return this.#functionHandles.get(value);
+  }
+
+  #stringValue(value: mixed): string {
+    if (value !== null && (typeof value === 'object' || typeof value === 'function')) {
+      throw new InvalidValueError(value);
+    }
+    const stringValue = String(value);
+    if (stringValue.length > (this.options.maxStringLength ?? 1_000_000)) {
+      throw new RangeError('String value exceeds maxStringLength');
+    }
+    return stringValue;
+  }
+
+  #addValues(left: mixed, right: mixed): mixed {
+    if (typeof left === 'string' || typeof right === 'string') {
+      const result = `${this.#stringValue(left)}${this.#stringValue(right)}`;
+      if (result.length > (this.options.maxStringLength ?? 1_000_000)) {
+        throw new RangeError('String value exceeds maxStringLength');
+      }
+      return result;
+    }
+    if (typeof left === 'number' && typeof right === 'number') return left + right;
+    throw new InvalidValueError(typeof left !== 'number' ? left : right);
+  }
+
+  #applyAssignment(type: number, current: mixed, value: mixed): mixed {
+    if (type === LEXER.AssignmentAdd || type === LEXER.Increment) return this.#addValues(current, value);
+    if (typeof current !== 'number' || typeof value !== 'number') {
+      throw new InvalidValueError(typeof current !== 'number' ? current : value);
+    }
+    if (type === LEXER.AssignmentSubstract || type === LEXER.Decrement) return current - value;
+    if (type === LEXER.AssignmentMultiply) return current * value;
+    return current / value;
+  }
+
+  #validateSubscriptWrite(data: mixed, key: string | number, value: mixed): void {
+    if (data === null || typeof data !== 'object') {
+      throw new InvalidValueError(data);
+    }
+    if (!Array.isArray(data)) return;
+    const limit = this.options.maxCollectionLength ?? 100_000;
+    if (key === 'length') {
+      if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > limit) {
+        throw new RangeError('Array length exceeds maxCollectionLength');
+      }
+      return;
+    }
+    const index = typeof key === 'number' ? key : Number(key);
+    if (Number.isSafeInteger(index) && index >= 0 && String(index) === String(key) && index + 1 > limit) {
+      throw new RangeError('Array length exceeds maxCollectionLength');
+    }
   }
 
   use(plugin: Plugin): void {
@@ -119,6 +214,7 @@ export default class VMachine {
               {
                 callFunction: (fn, values) => vmachine.callFunctionValue(fn, values, frame, opts),
                 propertyKey,
+                signal: opts.signal,
               },
               kwargs,
             ),
@@ -131,21 +227,14 @@ export default class VMachine {
   // function) with positional arguments. A fresh Frame is used so the caller's
   // own frame (still needed by the outer execute loop) is never mutated.
   async callFunctionValue(fn: mixed, values: $ReadOnlyArray<mixed>, frame: Frame, opts: EvalOptions): Promise<mixed> {
-    if (fn === null || typeof fn !== 'object' || typeof fn.callback !== 'function') {
+    if (fn === null || typeof fn !== 'object') {
       throw new InvalidValueError(fn);
     }
-    // $FlowFixMe[incompatible-type]
-    // $FlowFixMe[sketchy-null-mixed]
-    const fn_args: $ReadOnlyArray<ArgDef> = fn.args || [];
+    const definition = this.#functionDefinition(fn);
+    if (typeof definition === 'undefined') throw new InvalidValueError(fn);
+    const fn_args: $ReadOnlyArray<ArgDef> = definition.args;
     const call_frame = new Frame(undefined, frame);
     call_frame.stack = values.slice(0, fn_args.length);
-    const definition = VMachine.makeCommand({
-      args: fn_args,
-      // $FlowFixMe[incompatible-call]
-      callback: fn.callback,
-      type: typeof fn.type === 'number' ? fn.type : FUNCTION_TYPE.Native,
-      unsafe: fn.unsafe === true,
-    });
     return await this.#invokeFunction(opts, call_frame, '<callback>', definition, '', false);
   }
 
@@ -241,23 +330,24 @@ export default class VMachine {
           }
           return null;
         }
-        return internal_res;
+        return this.#functionHandleFor(internal_res) ?? internal_res;
       }
     }
 
     try {
-      return await this.options.processCommandJob(
+      const result = await this.options.processCommandJob(
         {
           cmdRaw,
           cmdName: name,
           cmdDef: cmd_def,
           kwargs: kwargs,
-          args: frame.stack.map(item => String(item)),
+          args: frame.stack.map(item => this.#stringValue(item)),
           signal: opts.signal,
           executionOptions: opts,
         },
         silent,
       );
+      return this.#functionHandleFor(result) ?? result;
     } catch (err) {
       if (!silent || opts.throwSilentErrors === true || err instanceof ExecutionStoppedError) throw err;
       return null;
@@ -375,8 +465,7 @@ export default class VMachine {
             const valB = activeFrame.stack.pop();
             const valA = activeFrame.stack.pop();
             if (typeof valA === 'string' || typeof valB === 'string') {
-              // String concatenation: coerce the other operand (i.e. booleans, null...) to a string
-              activeFrame.stack.push(`${String(valA)}${String(valB)}`);
+              activeFrame.stack.push(this.#addValues(valA, valB));
             } else if (typeof valA === 'number' && typeof valB === 'number') {
               activeFrame.stack.push(valA + valB);
             } else if (typeof valA !== 'number') {
@@ -481,16 +570,20 @@ export default class VMachine {
                   // Higher-order plugin callbacks receive the current execution options.
                   // Zero-arg functions ($$RMOD, $$mop, etc.) are still called immediately.
                   if (frame.stack.length === 1 && frame.args.length === 0) {
-                    // $FlowFixMe[incompatible-use]
-                    const fn_args_len: number = frame.stack[0]?.args?.length ?? 0;
+                    const fn_args_len: number = this.#functionDefinition(frame.stack[0])?.args.length ?? 0;
                     if (fn_args_len > 0) {
                       activeFrame = callStack.at(-1) || rootFrame;
                       activeFrame.stack.push(frame.stack[0]);
                       break;
                     }
                   }
-                  // $FlowFixMe[incompatible-type]
-                  cmd_def = frame.stack.shift();
+                  const functionValue = frame.stack.shift();
+                  if (functionValue === null || typeof functionValue !== 'object') {
+                    throw new InvalidValueError(functionValue);
+                  }
+                  const functionDefinition = this.#functionDefinition(functionValue);
+                  if (typeof functionDefinition === 'undefined') throw new InvalidValueError(functionValue);
+                  cmd_def = functionDefinition;
                 }
               }
               // Subframes are executed in silent mode
@@ -498,7 +591,6 @@ export default class VMachine {
                 sopts,
                 frame,
                 frame_cmd,
-                // $FlowFixMe[incompatible-call]
                 cmd_def,
                 parse_info.inputRawString,
                 instr.type === INSTRUCTION_TYPE.CALL_FUNCTION_SILENT || sopts.silent === true,
@@ -542,25 +634,12 @@ export default class VMachine {
                 token.type === LEXER.Increment ||
                 token.type === LEXER.Decrement
               ) {
-                let stored_value = activeFrame.getLocal(vname);
+                const stored_value = activeFrame.getLocal(vname);
                 if (typeof stored_value === 'undefined') {
                   throw new InvalidNameError(vname, token.start, token.end);
                 }
 
-                if (token.type === LEXER.AssignmentAdd || token.type === LEXER.Increment) {
-                  // $FlowFixMe[unsafe-addition]
-                  stored_value = stored_value + vvalue;
-                } else if (token.type === LEXER.AssignmentSubstract || token.type === LEXER.Decrement) {
-                  // $FlowFixMe[unsafe-arithmetic]
-                  stored_value = stored_value - vvalue;
-                } else if (token.type === LEXER.AssignmentMultiply) {
-                  // $FlowFixMe[unsafe-arithmetic]
-                  stored_value = stored_value * vvalue;
-                } else if (token.type === LEXER.AssignmentDivide) {
-                  // $FlowFixMe[unsafe-arithmetic]
-                  stored_value = stored_value / vvalue;
-                }
-                activeFrame.setLocal(vname, stored_value);
+                activeFrame.setLocal(vname, this.#applyAssignment(token.type, stored_value, vvalue));
               } else {
                 activeFrame.setLocal(vname, vvalue);
               }
@@ -574,20 +653,11 @@ export default class VMachine {
             const attr_name = propertyKey(activeFrame.stack.pop());
             const data = activeFrame.stack.pop();
             try {
+              this.#validateSubscriptWrite(data, attr_name, attr_value);
               // $FlowFixMe[incompatible-type]
               const data_obj: {[mixed]: mixed} = data;
-              if (token.type === LEXER.AssignmentAdd || token.type === LEXER.Increment) {
-                // $FlowFixMe[unsafe-addition]
-                data_obj[attr_name] = data_obj[attr_name] + attr_value;
-              } else if (token.type === LEXER.AssignmentSubstract || token.type === LEXER.Decrement) {
-                // $FlowFixMe[unsafe-arithmetic]
-                data_obj[attr_name] = data_obj[attr_name] - attr_value;
-              } else if (token.type === LEXER.AssignmentMultiply) {
-                // $FlowFixMe[unsafe-arithmetic]
-                data_obj[attr_name] = data_obj[attr_name] * attr_value;
-              } else if (token.type === LEXER.AssignmentDivide) {
-                // $FlowFixMe[unsafe-arithmetic]
-                data_obj[attr_name] = data_obj[attr_name] / attr_value;
+              if (token.type !== LEXER.Assignment) {
+                data_obj[attr_name] = this.#applyAssignment(token.type, data_obj[attr_name], attr_value);
               } else {
                 data_obj[attr_name] = attr_value;
               }
@@ -629,6 +699,9 @@ export default class VMachine {
         case INSTRUCTION_TYPE.BUILD_LIST:
           {
             const iter_count = instr.operand;
+            if (iter_count > (this.options.maxCollectionLength ?? 100_000)) {
+              throw new RangeError('Collection exceeds maxCollectionLength');
+            }
             const value = [];
             for (let i = 0; i < iter_count; ++i) {
               value.push(activeFrame.stack.pop());
@@ -639,6 +712,9 @@ export default class VMachine {
         case INSTRUCTION_TYPE.BUILD_MAP:
           {
             const iter_count = instr.operand;
+            if (iter_count > (this.options.maxCollectionLength ?? 100_000)) {
+              throw new RangeError('Collection exceeds maxCollectionLength');
+            }
             const value: {[mixed]: mixed} = {};
             for (let i = 0; i < iter_count; ++i) {
               const val = activeFrame.stack.pop();
@@ -676,9 +752,12 @@ export default class VMachine {
                 detail: i18n.t('trash.vmachine.func.detail', 'Internal function'),
               };
               if (typeof name === 'string') {
+                if (Object.hasOwn(this.#registeredCmds, name)) {
+                  throw new Error(`Cannot replace registered command '${name}'`);
+                }
                 this.registerCommand(name, cmd_def);
               } else {
-                activeFrame.stack.push(cmd_def);
+                activeFrame.stack.push(this.#functionHandle(VMachine.makeCommand(cmd_def)));
               }
             }
           }

@@ -38,12 +38,19 @@ does not suppress them. The error is available from
 `@tardo/trash/exceptions/execution_stopped_error`.
 
 These are cooperative execution controls, not a wall-clock or memory sandbox.
-The instruction budget does not limit parsing, allocation sizes, or JavaScript
-inside host callbacks. Cancellation cannot forcibly stop a pending callback;
-the callback must cooperate with the signal. For hostile scripts, isolate
-parsing and execution in a terminable worker/process and limit input size at
-the application boundary. Only execute compiled programs produced by your
-own `Interpreter`, not instruction objects supplied by clients.
+Cancellation cannot forcibly stop a pending callback; the callback must
+cooperate with the signal. Plugins receive that same signal in their context.
+For hostile scripts, isolate parsing and execution in a terminable
+worker/process and enforce wall-clock and memory limits at the application
+boundary. Only execute compiled programs produced by your own `Interpreter`,
+not instruction objects supplied by clients.
+
+`Interpreter.parse` accepts `maxSourceLength` (default `1_000_000` UTF-16
+code units) and `maxNestingDepth` (default `100`). `VMachine` accepts
+`maxCollectionLength` (default `100_000`) and `maxStringLength` (default
+`1_000_000`). These limits reject oversized source, parser nesting, collection
+construction/expansion, and string concatenation. Raise a limit only for a
+trusted workload with an independent resource limit.
 
 ## Properties and host objects
 
@@ -54,11 +61,13 @@ own `Interpreter`, not instruction objects supplied by clients.
 - Array and string indexes and `length` remain available. Nonnumeric array
   lookups can project own properties from its elements; null/missing elements
   contribute `undefined`.
-- Arrays and dictionaries are passed by reference. Assignments can change objects
-  returned by the host.
-  Clone data before exposing it if that mutation is unwanted.
-- Host extensions are trusted code. Expose plain data rather than powerful
-  objects, accessors or proxies; this boundary is not an object membrane.
+- Command and plugin results preserve their host identity, including
+  non-cloneable values. Scripts can mutate returned host objects, so extensions
+  must expose only objects they intentionally make script-accessible.
+- Script functions are opaque handles. Their callback, arguments, type and
+  `unsafe` metadata are never script-visible or script-mutable.
+- Host extensions are trusted code. Validate all command input and do not use
+  it to select or execute host callbacks.
 
 `unsafe: true` invokes `confirmUnsafe` **when that callback is configured**.
 It does not deny execution by default and does not implement authorization.
@@ -75,8 +84,8 @@ Apply authorization in the host command handler.
   otherwise it creates a variable in the current frame.
 - Functions resolve outer variables through their **calling frame**, not a
   captured lexical closure. Parameters are local to the function call.
-- Named function declarations enter the VM command registry and can replace
-  an existing command with the same name.
+- Named function declarations enter the VM command registry, but cannot replace
+  an existing command.
 - `$fn` reads a function value. `$$fn ...` invokes it. For compatibility,
   `$$fn` in argument position passes functions that declare parameters, but
   invokes zero-parameter functions. Prefer `$fn` when explicitly passing a

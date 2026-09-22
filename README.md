@@ -1,5 +1,6 @@
 <h1 align="center">
-  <div>TraSH: Capability-based application scripting</div>
+  <div>TraSH</div>
+  <small>~ Capability-based application scripting ~</small>
 
 [![Tests](https://github.com/Tardo/TraSH/actions/workflows/tests.yml/badge.svg)](https://github.com/Tardo/TraSH/actions/workflows/tests.yml)
 </h1>
@@ -11,8 +12,8 @@ effects. Scripts combine those capabilities with expressions, variables, functio
 Scripts run through TraSH's parser and virtual machine — **no JavaScript `eval()`**. TraSH was extracted from
 [OdooTerminal](https://github.com/Tardo/OdooTerminal), where its command-oriented scripting model was developed.
 
-Execution has a configurable instruction budget and supports `AbortSignal` cancellation. See the
-[runtime contract](docs/runtime.md) for property isolation, scope rules, compatibility changes, and the limits of these
+Execution has configurable instruction, source-size, nesting, collection, and string limits, and supports `AbortSignal`
+cancellation. See the [runtime contract](docs/runtime.md) for host-object handling, scope rules, and the limits of these
 controls.
 
 ## Why TraSH?
@@ -20,19 +21,19 @@ controls.
 Use TraSH when an application needs more than expressions or data transformations, but should not expose arbitrary
 JavaScript. It is a middle ground between expression engines and full JavaScript runtimes:
 
-| If you need                                                      | Use                                                 |
-| ---------------------------------------------------------------- | --------------------------------------------------- |
-| Rules, filters, or JSON transformations                          | An expression engine such as CEL, JEXL, or JSONata. |
-| User-defined workflows composed from application commands        | TraSH.                                              |
-| Arbitrary JavaScript or a hardened JavaScript isolation boundary | A dedicated JavaScript runtime or sandbox.          |
+| If you need                                               | Use                                                 |
+| --------------------------------------------------------- | --------------------------------------------------- |
+| Rules, filters, or JSON transformations                   | An expression engine such as CEL, JEXL, or JSONata. |
+| User-defined workflows composed from application commands | TraSH.                                              |
+| Untrusted scripts or a hardened isolation boundary        | A dedicated JavaScript runtime or sandbox.          |
 
 This model fits user automations, administrator rules, and agent-generated workflows: the application owns the
 vocabulary (`search`, `create`, `notify`, and so on), while scripts own the logic that composes it.
 
-TraSH does not grant direct access to Node.js, the DOM, network APIs, or host globals. Its instruction budget and
-cancellation are cooperative execution controls, not a wall-clock or memory sandbox. For hostile scripts, run parsing
-and execution in a terminable worker or process; see the
-[runtime contract](docs/runtime.md#execution-limits-and-cancellation).
+TraSH does not grant direct access to Node.js, the DOM, network APIs, or host globals unless the host deliberately
+returns one through a command or plugin. Its instruction budget and cancellation are cooperative execution controls, not
+a wall-clock or memory sandbox. For hostile scripts, run parsing and execution in a terminable worker or process; see
+the [runtime contract](docs/runtime.md#execution-limits-and-cancellation).
 
 ## Installation
 
@@ -75,6 +76,8 @@ import {
 const interpreter = new Interpreter();
 const vmachine = new VMachine({
   maxInstructions: 100_000,
+  maxCollectionLength: 100_000,
+  maxStringLength: 1_000_000,
   processCommandJob: async ({cmdName, kwargs}) => {
     if (cmdName !== 'notify') {
       throw new Error(`Unknown host command: ${cmdName}`);
@@ -115,9 +118,10 @@ try {
 `processCommandJob` is the boundary between TraSH and the host application. Validate and perform all side effects there,
 such as database writes, navigation, or API calls.
 
-The default budget is 1,000,000 instructions; this example lowers it to 100,000. Cancellation is cooperative: host
-operations must also honor the `signal` received by `processCommandJob`. See the
-[runtime contract](docs/runtime.md#execution-limits-and-cancellation) for details.
+The default budget is 1,000,000 instructions; this example lowers it to 100,000. Collection and string limits default to
+100,000 items and 1,000,000 UTF-16 code units. Cancellation is cooperative: host operations must also honor the `signal`
+received by `processCommandJob`. See the [runtime contract](docs/runtime.md#execution-limits-and-cancellation) for
+details.
 
 ## Translations
 

@@ -14,6 +14,7 @@ export type PluginArguments = {[string]: any};
 export type PluginContext = {
   callFunction: (fn: mixed, values: $ReadOnlyArray<mixed>) => Promise<mixed>,
   propertyKey: (key: mixed) => string | number,
+  signal?: AbortSignal,
 };
 export type PluginCallback = (context: PluginContext, kwargs: PluginArguments) => Promise<mixed>;
 export type PluginCommand = $ReadOnly<{

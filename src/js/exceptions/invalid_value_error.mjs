@@ -8,9 +8,11 @@ export default class extends Error {
   value: mixed;
 
   constructor(value: mixed) {
+    const valueText =
+      value === null ? 'null' : typeof value === 'object' || typeof value === 'function' ? typeof value : String(value);
     super(
       i18n.t('trash.exception.invalidValueError', "Invalid value '{{value}}'", {
-        value: new String(value).toString(),
+        value: valueText,
       }),
     );
     this.name = 'InvalidValueError';

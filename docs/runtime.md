@@ -43,7 +43,7 @@ cooperate with the signal. Plugins receive that same signal in their context.
 For hostile scripts, isolate parsing and execution in a terminable
 worker/process and enforce wall-clock and memory limits at the application
 boundary. Only execute compiled programs produced by your own `Interpreter`,
-not instruction objects supplied by clients.
+not bytecode supplied by clients.
 
 `Interpreter.parse` accepts `maxSourceLength` (default `1_000_000` UTF-16
 code units) and `maxNestingDepth` (default `100`). `VMachine` accepts
@@ -76,14 +76,20 @@ Apply authorization in the host command handler.
 ## Variables and functions
 
 - Global variables persist within a VM. `cleanGlobals()` resets variables,
-  but does not remove registered commands or named script functions.
+  but does not remove registered commands or named script functions. Existing
+  closures retain their captured environment, including the previous globals.
 - `execute(program, options, new Frame())` isolates the variable frame. The
   command registry still belongs to the VM. Use separate VMs for separate
   user sessions, and serialize executions that intentionally share state.
 - Assignment updates the nearest existing variable in the frame chain;
   otherwise it creates a variable in the current frame.
-- Functions resolve outer variables through their **calling frame**, not a
-  captured lexical closure. Parameters are local to the function call.
+- Functions capture their **lexical environment at definition time**. Parameters
+  are local to each call and shadow captured names. Reads and assignments to
+  outer variables use that captured environment, never the caller's locals.
+  Captured bindings are shared by reference: updates remain visible, and closures
+  keep working after their defining function or block has exited. Separate calls
+  to a factory create independent local bindings. Default expressions also use
+  the captured environment when evaluated.
 - Named function declarations enter the VM command registry, but cannot replace
   an existing command.
 - `$fn` reads a function value. `$$fn ...` invokes it. For compatibility,
@@ -94,6 +100,43 @@ Apply authorization in the host command handler.
   same path as ordinary calls. Defaults are evaluated only when omitted.
   Extra values supplied by a higher-order helper are ignored when the
   callback declares fewer parameters.
+
+```text
+$x = 1;
+function read() { return $x };
+function caller(x) { return (read) };
+caller 7  // returns 1, not 7
+```
+
+This replaces the previous dynamic-scope behavior. Scripts that relied on a
+caller's locals must pass those values as explicit arguments.
+
+## Compiled bytecode
+
+`Interpreter.parse(...)` returns a `ParseInfo` whose `program` contains:
+
+- `instructions: Uint8Array`: fixed-width instructions, **5 bytes each**. Byte 0
+  is an `INSTRUCTION_TYPE` opcode; bytes 1–4 are a signed 32-bit little-endian
+  operand. Unused operands are `-1`.
+- `constants: Array<mixed>`: a single pool for names, literals, argument
+  definitions and nested compiled function bodies. Load/store name operands and
+  constant loads index this pool; collection sizes and jump distances are
+  immediate operands. Jump distances count instructions, not bytes.
+- `sourceMap: Int32Array`: two entries per instruction, `[unit, tokenIndex]`,
+  indexing `ParseInfo.inputTokens`. A token index of `-1` means no source token.
+  Keep this table and the tokens: argument loading and compound assignments use
+  them as well as error reporting.
+
+The VM decodes bytes directly without creating instruction objects. The old
+`Array<Instruction>`, `names` and `values` layout is no longer accepted; recompile
+previously cached programs. Cache compiled data only with a matching TraSH
+version and command definitions. Runtime closures are created on execution, not
+stored in the compiled pool.
+
+Compiled results support structured cloning and, in Node.js, a binary round trip
+through `node:v8`'s `serialize`/`deserialize`, including nested functions and
+`undefined` constants. Plain JSON does not preserve typed arrays or all literal
+values.
 
 ## Syntax and errors
 

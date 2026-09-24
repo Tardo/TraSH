@@ -17,7 +17,6 @@ import CodeGen from './codegen';
 import isFalsy from './utils/is_falsy';
 import isNumber from './utils/is_number';
 import InvalidTokenError from './exceptions/invalid_token_error';
-import type Instruction from './instruction';
 import type {default as VMachine, EvalOptions} from './vmachine';
 import type Frame from './frame';
 
@@ -69,9 +68,9 @@ export type TokenInfo = {
 
 export type ParseInfo = {
   program: {
-    instructions: Array<Instruction>,
-    names: Array<Array<string | null>>,
-    values: Array<Array<mixed>>,
+    instructions: Uint8Array,
+    constants: Array<mixed>,
+    sourceMap: Int32Array,
   },
   inputTokens: Array<Array<TokenInfo>>,
   inputRawString: string,
@@ -79,6 +78,7 @@ export type ParseInfo = {
 };
 
 export type CMDDef = {
+  closure?: Frame,
   definition: string,
   callback: CMDCallback | CMDCallbackInternal,
   options: CMDOptionsCallback,

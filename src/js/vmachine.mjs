@@ -4,7 +4,7 @@
 
 import * as i18n from './translation';
 import {validateAndFormatArguments, getArgumentInputCount, getArgumentInfoByName, getArgumentInfo} from './argument';
-import {INSTRUCTION_TYPE, ARG, LEXER} from './constants';
+import {INSTRUCTION_TYPE, INSTRUCTION_SIZE, ARG, LEXER} from './constants';
 import {default as FunctionTrash, FUNCTION_TYPE} from './function';
 import Frame from './frame';
 import InvalidCommandArgumentFormatError from './exceptions/invalid_command_argument_format_error';
@@ -23,7 +23,6 @@ import isNumber from './utils/is_number';
 import {ownProperty, propertyKey} from './utils/property';
 import ExecutionStoppedError from './exceptions/execution_stopped_error';
 import type {RegisteredCMD, CMDDef, ParseInfo, CMDCallbackArgs, TokenInfo, ArgDef} from './interpreter';
-import type Instruction from './instruction';
 import type {Plugin} from './plugin';
 
 type FunctionHandle = {[string]: mixed};
@@ -312,6 +311,8 @@ export default class VMachine {
     }
     let kwargs: {[string]: mixed} = {};
     if (typeof cmd_def !== 'undefined') {
+      // Defaults use the same lexical environment as the function body.
+      if (cmd_def.type === FUNCTION_TYPE.Native) frame.prevFrame = cmd_def.closure;
       kwargs = await this.#genKwargs(opts, frame, name, cmd_def);
       if (opts.signal?.aborted) throw new ExecutionStoppedError('Execution aborted');
       if (cmd_def.type !== FUNCTION_TYPE.Command) {
@@ -372,7 +373,9 @@ export default class VMachine {
     this.#executions.set(sopts, execution);
     const signal = sopts.signal;
     if (signal?.aborted) throw new ExecutionStoppedError('Execution aborted');
-    const instrLen = program.instructions.length;
+    const {instructions, constants, sourceMap} = program;
+    const bytecode = new DataView(instructions.buffer, instructions.byteOffset, instructions.byteLength);
+    const instrLen = instructions.length / INSTRUCTION_SIZE;
     let rootFrame = aframe;
     if (typeof rootFrame === 'undefined') {
       rootFrame = new Frame();
@@ -383,8 +386,10 @@ export default class VMachine {
     let activeFrame = rootFrame;
     // Tokens are only needed by a few instructions (mostly on error paths),
     // so they are resolved on demand instead of once per instruction
-    const getToken = (instr: Instruction): TokenInfo =>
-      instr.inputTokenIndex >= 0 ? parse_info.inputTokens[instr.level][instr.inputTokenIndex] : DEFAULT_TOKEN;
+    const getToken = (index: number): TokenInfo =>
+      sourceMap[index * 2 + 1] >= 0
+        ? parse_info.inputTokens[sourceMap[index * 2]][sourceMap[index * 2 + 1]]
+        : DEFAULT_TOKEN;
     for (let index = 0; !eoe && index < instrLen; ++index) {
       if (--execution.remaining < 0) throw new ExecutionStoppedError('Instruction limit exceeded');
       if (++execution.ticks === 65_536) {
@@ -392,20 +397,22 @@ export default class VMachine {
         await new Promise(resolve => setTimeout(resolve, 0));
       }
       if (signal?.aborted) throw new ExecutionStoppedError('Execution aborted');
-      const instr = program.instructions[index];
-      switch (instr.type) {
+      const opcode = instructions[index * INSTRUCTION_SIZE];
+      const operand = bytecode.getInt32(index * INSTRUCTION_SIZE + 1, true);
+      switch (opcode) {
         case INSTRUCTION_TYPE.LOAD_NAME_CALLEABLE:
         case INSTRUCTION_TYPE.LOAD_NAME:
           {
-            const var_name = program.names[instr.level][instr.operand] || '';
-            if (instr.type === INSTRUCTION_TYPE.LOAD_NAME_CALLEABLE) {
+            const var_name = constants[operand];
+            if (typeof var_name !== 'string') throw new InvalidInstructionError();
+            if (opcode === INSTRUCTION_TYPE.LOAD_NAME_CALLEABLE) {
               activeFrame = new Frame('__anon__', activeFrame);
               callStack.push(activeFrame);
             }
             // Check locals
             const owner_frame = activeFrame.resolveLocal(var_name);
             if (typeof owner_frame === 'undefined') {
-              const token = getToken(instr);
+              const token = getToken(index);
               throw new UnknownNameError(var_name, token.start, token.end);
             }
             activeFrame.stack.push(owner_frame.locals[var_name]);
@@ -413,9 +420,9 @@ export default class VMachine {
           break;
         case INSTRUCTION_TYPE.LOAD_GLOBAL:
           {
-            const cmd_name = program.names[instr.level][instr.operand];
-            if (cmd_name === null || typeof cmd_name === 'undefined') {
-              const token = getToken(instr);
+            const cmd_name = constants[operand];
+            if (typeof cmd_name !== 'string') {
+              const token = getToken(index);
               throw new UnknownNameError(
                 i18n.t('UnknownNameError.invalidName', '<InvalidName>'),
                 token.start,
@@ -425,20 +432,20 @@ export default class VMachine {
               activeFrame = new Frame(cmd_name, activeFrame);
               callStack.push(activeFrame);
             } else {
-              const token = getToken(instr);
+              const token = getToken(index);
               throw new UnknownCommandError(cmd_name, token.start, token.end);
             }
           }
           break;
         case INSTRUCTION_TYPE.LOAD_CONST:
           {
-            const value = program.values[instr.level][instr.operand];
+            const value = constants[operand];
             activeFrame.stack.push(value);
           }
           break;
         case INSTRUCTION_TYPE.LOAD_ARG:
           {
-            const token = getToken(instr);
+            const token = getToken(index);
             const arg_name = token.value;
             if (!activeFrame) {
               throw new NotExpectedCommandArgumentError(arg_name, token.start, token.end);
@@ -488,13 +495,13 @@ export default class VMachine {
             if (typeof valA !== 'number') {
               throw new InvalidValueError(valA);
             }
-            if (instr.type === INSTRUCTION_TYPE.SUBSTRACT) {
+            if (opcode === INSTRUCTION_TYPE.SUBSTRACT) {
               activeFrame.stack.push(valA - valB);
-            } else if (instr.type === INSTRUCTION_TYPE.MULTIPLY) {
+            } else if (opcode === INSTRUCTION_TYPE.MULTIPLY) {
               activeFrame.stack.push(valA * valB);
-            } else if (instr.type === INSTRUCTION_TYPE.DIVIDE) {
+            } else if (opcode === INSTRUCTION_TYPE.DIVIDE) {
               activeFrame.stack.push(valA / valB);
-            } else if (instr.type === INSTRUCTION_TYPE.MODULO) {
+            } else if (opcode === INSTRUCTION_TYPE.MODULO) {
               activeFrame.stack.push(valA % valB);
             }
           }
@@ -506,15 +513,15 @@ export default class VMachine {
           {
             const valB = activeFrame.stack.pop();
             const valA = activeFrame.stack.pop();
-            if (instr.type === INSTRUCTION_TYPE.AND) {
+            if (opcode === INSTRUCTION_TYPE.AND) {
               // $FlowFixMe[sketchy-null-mixed]
               activeFrame.stack.push(valA && valB);
-            } else if (instr.type === INSTRUCTION_TYPE.OR) {
+            } else if (opcode === INSTRUCTION_TYPE.OR) {
               // $FlowFixMe[sketchy-null-mixed]
               activeFrame.stack.push(valA || valB);
-            } else if (instr.type === INSTRUCTION_TYPE.EQUAL) {
+            } else if (opcode === INSTRUCTION_TYPE.EQUAL) {
               activeFrame.stack.push(valA === valB);
-            } else if (instr.type === INSTRUCTION_TYPE.NOT_EQUAL) {
+            } else if (opcode === INSTRUCTION_TYPE.NOT_EQUAL) {
               activeFrame.stack.push(valA !== valB);
             }
           }
@@ -534,13 +541,13 @@ export default class VMachine {
               throw new InvalidValueError(valA);
             }
 
-            if (instr.type === INSTRUCTION_TYPE.GREATER_THAN_OPEN) {
+            if (opcode === INSTRUCTION_TYPE.GREATER_THAN_OPEN) {
               activeFrame.stack.push(valA > valB);
-            } else if (instr.type === INSTRUCTION_TYPE.LESS_THAN_OPEN) {
+            } else if (opcode === INSTRUCTION_TYPE.LESS_THAN_OPEN) {
               activeFrame.stack.push(valA < valB);
-            } else if (instr.type === INSTRUCTION_TYPE.GREATER_THAN_CLOSED) {
+            } else if (opcode === INSTRUCTION_TYPE.GREATER_THAN_CLOSED) {
               activeFrame.stack.push(valA >= valB);
-            } else if (instr.type === INSTRUCTION_TYPE.LESS_THAN_CLOSED) {
+            } else if (opcode === INSTRUCTION_TYPE.LESS_THAN_CLOSED) {
               activeFrame.stack.push(valA <= valB);
             }
           }
@@ -593,7 +600,7 @@ export default class VMachine {
                 frame_cmd,
                 cmd_def,
                 parse_info.inputRawString,
-                instr.type === INSTRUCTION_TYPE.CALL_FUNCTION_SILENT || sopts.silent === true,
+                opcode === INSTRUCTION_TYPE.CALL_FUNCTION_SILENT || sopts.silent === true,
               );
               activeFrame = callStack.at(-1) || rootFrame;
               activeFrame.stack.push(ret);
@@ -610,20 +617,19 @@ export default class VMachine {
           break;
         case INSTRUCTION_TYPE.STORE_NAME:
           {
-            const token = getToken(instr);
-            const vname = program.names[instr.level][instr.operand];
+            const token = getToken(index);
+            const vname = constants[operand];
             // An empty stack means a malformed assignment (e.g. '$x ='); a popped
             // 'undefined' is now a legit value (missing dict/array member access)
             const has_value = activeFrame.stack.length > 0;
             const vvalue = activeFrame.stack.pop();
-            if (vname === null || typeof vname === 'undefined') {
+            if (typeof vname !== 'string') {
               if (!token) {
                 throw new InvalidInstructionError();
               }
               throw new InvalidNameError(token.value, token.start, token.end);
             } else if (!has_value) {
-              const value_instr = program.instructions[index - 1];
-              const value_token = parse_info.inputTokens[value_instr.level][value_instr.inputTokenIndex] || {};
+              const value_token = getToken(index - 1);
               throw new InvalidTokenError(value_token.value, value_token.start, value_token.end);
             } else {
               if (
@@ -648,7 +654,7 @@ export default class VMachine {
           break;
         case INSTRUCTION_TYPE.STORE_SUBSCR:
           {
-            const token = getToken(instr);
+            const token = getToken(index);
             const attr_value = activeFrame.stack.pop();
             const attr_name = propertyKey(activeFrame.stack.pop());
             const data = activeFrame.stack.pop();
@@ -698,7 +704,7 @@ export default class VMachine {
           break;
         case INSTRUCTION_TYPE.BUILD_LIST:
           {
-            const iter_count = instr.operand;
+            const iter_count = operand;
             if (iter_count > (this.options.maxCollectionLength ?? 100_000)) {
               throw new RangeError('Collection exceeds maxCollectionLength');
             }
@@ -711,7 +717,7 @@ export default class VMachine {
           break;
         case INSTRUCTION_TYPE.BUILD_MAP:
           {
-            const iter_count = instr.operand;
+            const iter_count = operand;
             if (iter_count > (this.options.maxCollectionLength ?? 100_000)) {
               throw new RangeError('Collection exceeds maxCollectionLength');
             }
@@ -737,17 +743,18 @@ export default class VMachine {
             const name = activeFrame.stack.pop();
             const args = activeFrame.stack.pop();
             const code = activeFrame.stack.pop();
-            if (args instanceof Array && code !== null && typeof code === 'object') {
+            if (Array.isArray(args) && code !== null && typeof code === 'object') {
               // $FlowFixMe[incompatible-indexer]
               // $FlowFixMe[incompatible-variance]
               // $FlowFixMe[incompatible-call]
-              const trash_func = new FunctionTrash(args, code);
+              const trash_func = new FunctionTrash(args, code, activeFrame);
               // $FlowFixMe[method-unbinding]
               const exec_bound = trash_func.exec.bind(trash_func);
               const cmd_def: Partial<CMDDef> = {
+                closure: trash_func.closure,
                 callback: exec_bound,
                 type: FUNCTION_TYPE.Native,
-                args: args,
+                args: trash_func.args,
                 definition: i18n.t('trash.vmachine.func.definition', 'Internal function'),
                 detail: i18n.t('trash.vmachine.func.detail', 'Internal function'),
               };
@@ -765,7 +772,7 @@ export default class VMachine {
         case INSTRUCTION_TYPE.JUMP_IF_FALSE:
           {
             activeFrame.lastFlowCheck = activeFrame.stack.at(-1);
-            const num_to_skip = instr.operand;
+            const num_to_skip = operand;
             if (
               typeof activeFrame.lastFlowCheck === 'undefined' ||
               activeFrame.lastFlowCheck === null ||
@@ -778,7 +785,7 @@ export default class VMachine {
         case INSTRUCTION_TYPE.JUMP_IF_FALSE_POP:
           {
             activeFrame.lastFlowCheck = activeFrame.stack.pop();
-            const num_to_skip = instr.operand;
+            const num_to_skip = operand;
             if (
               typeof activeFrame.lastFlowCheck === 'undefined' ||
               activeFrame.lastFlowCheck === null ||
@@ -790,7 +797,7 @@ export default class VMachine {
           break;
         case INSTRUCTION_TYPE.JUMP_IF_TRUE:
           {
-            const num_to_skip = instr.operand;
+            const num_to_skip = operand;
             if (
               typeof activeFrame.lastFlowCheck !== 'undefined' &&
               activeFrame.lastFlowCheck !== null &&
@@ -802,13 +809,13 @@ export default class VMachine {
           break;
         case INSTRUCTION_TYPE.JUMP_BACKWARD:
           {
-            const num_to_back = instr.operand;
+            const num_to_back = operand;
             index -= num_to_back + 1;
           }
           break;
         case INSTRUCTION_TYPE.JUMP_FORWARD:
           {
-            const num_to_adv = instr.operand;
+            const num_to_adv = operand;
             if (num_to_adv > 0) {
               index += num_to_adv;
             }

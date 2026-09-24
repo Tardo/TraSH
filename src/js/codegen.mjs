@@ -2,9 +2,8 @@
 // Copyright  Alexandre Díaz <dev@redneboa.es>
 // License MIT.
 
-import {INSTRUCTION_TYPE, LEXER} from './constants';
+import {INSTRUCTION_TYPE, INSTRUCTION_SIZE, LEXER} from './constants';
 import {NODE} from './ast';
-import Instruction from './instruction';
 import InvalidTokenError from './exceptions/invalid_token_error';
 import type {ASTNode, ASTUnit, CommandArg} from './ast';
 import type {ParseInfo, ParserOptions} from './interpreter';
@@ -24,36 +23,46 @@ const BINARY_INSTR: Map<number, number> = new Map([
   [LEXER.Or, INSTRUCTION_TYPE.OR],
 ]);
 
-/**
- * Emits the legacy bytecode from the AST. The VM is untouched: instruction
- * shapes, stack discipline (statement results remain on the stack), jump
- * arithmetic and token references are kept byte-compatible.
- */
+// Numeric compiler buffers are packed after jump backpatching. No instruction
+// objects are allocated during compilation or execution.
 export default class CodeGen {
-  #instrs: Array<Instruction> = [];
-  #names: Array<Array<string | null>> = [];
-  #values: Array<Array<mixed>> = [];
+  #instrs: Array<number> = [];
+  #operands: Array<number> = [];
+  #sources: Array<number> = [];
+  #constants: Array<mixed> = [];
   #forinCount: number = 0;
 
   generate(data: string, root: ASTUnit, units: Array<ASTUnit>, options: ParserOptions): ParseInfo {
     this.#instrs = [];
-    this.#names = units.map(() => []);
-    this.#values = units.map(() => []);
+    this.#operands = [];
+    this.#sources = [];
+    this.#constants = [];
+    this.#forinCount = 0;
 
     this.#emitUnit(root);
 
     if (options?.noReturn === false || typeof options?.noReturn === 'undefined') {
       const last_instr = this.#instrs.at(-1);
-      if (typeof last_instr !== 'undefined' && last_instr.type !== INSTRUCTION_TYPE.RETURN_VALUE) {
-        this.#instrs.push(new Instruction(INSTRUCTION_TYPE.RETURN_VALUE, -1, -1));
+      if (typeof last_instr !== 'undefined' && last_instr !== INSTRUCTION_TYPE.RETURN_VALUE) {
+        this.#push(INSTRUCTION_TYPE.RETURN_VALUE, -1, -1);
       }
     }
 
+    const instructions = new Uint8Array(this.#instrs.length * INSTRUCTION_SIZE);
+    const view = new DataView(instructions.buffer);
+    for (let index = 0; index < this.#instrs.length; ++index) {
+      const operand = this.#operands[index];
+      if (!Number.isInteger(operand) || operand < -0x80000000 || operand > 0x7fffffff) {
+        throw new RangeError('Bytecode operand exceeds int32');
+      }
+      instructions[index * INSTRUCTION_SIZE] = this.#instrs[index];
+      view.setInt32(index * INSTRUCTION_SIZE + 1, operand, true);
+    }
     return {
       program: {
-        instructions: this.#instrs,
-        names: this.#names,
-        values: this.#values,
+        instructions,
+        constants: this.#constants,
+        sourceMap: new Int32Array(this.#sources),
       },
       inputTokens: units.map(unit => unit.tokens),
       inputRawString: data,
@@ -61,19 +70,20 @@ export default class CodeGen {
     };
   }
 
-  #push(type: number, token_index: number, level: number, operand?: number): number {
-    this.#instrs.push(new Instruction(type, token_index, level, operand));
+  #push(type: number, token_index: number, level: number, operand: number = -1): number {
+    this.#instrs.push(type);
+    this.#operands.push(operand);
+    this.#sources.push(level, token_index);
     return this.#instrs.length - 1;
   }
 
   #pushName(unit: ASTUnit, name: string | null): number {
-    this.#names[unit.id].push(name);
-    return this.#names[unit.id].length - 1;
+    return this.#pushValue(unit, name);
   }
 
-  #pushValue(unit: ASTUnit, value: mixed): number {
-    this.#values[unit.id].push(value);
-    return this.#values[unit.id].length - 1;
+  #pushValue(_unit: ASTUnit, value: mixed): number {
+    this.#constants.push(value);
+    return this.#constants.length - 1;
   }
 
   #emitUnit(unit: ASTUnit): void {
@@ -111,7 +121,7 @@ export default class CodeGen {
           const dindex = this.#pushValue(unit, null);
           this.#push(INSTRUCTION_TYPE.LOAD_CONST, this.#ti(stmt), unit.id, dindex);
         }
-        this.#instrs.push(new Instruction(INSTRUCTION_TYPE.RETURN_VALUE, -1, -1));
+        this.#push(INSTRUCTION_TYPE.RETURN_VALUE, -1, -1);
         break;
       case NODE.Break:
         this.#push(INSTRUCTION_TYPE.JUMP_FORWARD, this.#ti(stmt), unit.id, -2);
@@ -175,8 +185,7 @@ export default class CodeGen {
       const target_index = target.index;
       this.#emitExpr(unit, target_base, false);
       this.#emitUnit(target_index);
-      // Operand must be captured before the RHS pushes more names
-      store_operand = this.#names[unit.id].length - 1;
+      store_operand = -1;
       store_type = INSTRUCTION_TYPE.STORE_SUBSCR;
     } else {
       throw new InvalidTokenError(token.value, token.start, token.end);
@@ -220,7 +229,7 @@ export default class CodeGen {
       this.#push(INSTRUCTION_TYPE.POP_FRAME, ti, unit.id);
       const body_len = this.#instrs.length - body_start;
       jump_refs.push(this.#push(INSTRUCTION_TYPE.JUMP_FORWARD, ti, unit.id, -1));
-      this.#instrs[jifp_index].operand = body_len + 1;
+      this.#operands[jifp_index] = body_len + 1;
     }
 
     const else_body = stmt.elseBody;
@@ -230,11 +239,11 @@ export default class CodeGen {
       this.#push(INSTRUCTION_TYPE.PUSH_FRAME, ti, unit.id);
       this.#emitUnit(else_body);
       this.#push(INSTRUCTION_TYPE.POP_FRAME, ti, unit.id);
-      this.#instrs[jit_index].operand = this.#instrs.length - else_start;
+      this.#operands[jit_index] = this.#instrs.length - else_start;
     }
 
     for (const jump_ref of jump_refs) {
-      this.#instrs[jump_ref].operand = this.#instrs.length - jump_ref - 1;
+      this.#operands[jump_ref] = this.#instrs.length - jump_ref - 1;
     }
   }
 
@@ -264,7 +273,7 @@ export default class CodeGen {
     const iter_len = this.#instrs.length - iter_start;
 
     this.#patchLoopJumps(body_start, body_len, iter_len);
-    this.#instrs[jif_index].operand = body_len + iter_len + 1;
+    this.#operands[jif_index] = body_len + iter_len + 1;
     this.#push(INSTRUCTION_TYPE.JUMP_BACKWARD, ti, unit.id, this.#instrs.length - anchor_index);
     this.#push(INSTRUCTION_TYPE.POP_FRAME, ti, unit.id);
   }
@@ -324,19 +333,18 @@ export default class CodeGen {
     this.#patchLoopJumps(body_start, body_len, iter_len);
     this.#push(INSTRUCTION_TYPE.JUMP_BACKWARD, ti, unit.id, this.#instrs.length - anchor_index);
     const pop_index = this.#push(INSTRUCTION_TYPE.POP_FRAME, ti, unit.id);
-    this.#instrs[jif_index].operand = pop_index - jif_index - 1;
+    this.#operands[jif_index] = pop_index - jif_index - 1;
   }
 
   // Patch break (-2) / continue (-1) sentinels emitted within the body.
   #patchLoopJumps(body_start: number, body_len: number, iter_len: number): void {
     for (let index = body_start; index < body_start + body_len; ++index) {
-      const instr = this.#instrs[index];
-      if (instr.type === INSTRUCTION_TYPE.JUMP_FORWARD) {
+      if (this.#instrs[index] === INSTRUCTION_TYPE.JUMP_FORWARD) {
         const rel = index - body_start;
-        if (instr.operand === -2) {
-          instr.operand = body_len + iter_len - rel;
-        } else if (instr.operand === -1) {
-          instr.operand = body_len - rel - 1;
+        if (this.#operands[index] === -2) {
+          this.#operands[index] = body_len + iter_len - rel;
+        } else if (this.#operands[index] === -1) {
+          this.#operands[index] = body_len - rel - 1;
         }
       }
     }
@@ -455,11 +463,11 @@ export default class CodeGen {
       this.#emitExpr(unit, expr.consequent, silent);
     }
     const jf_index = this.#push(INSTRUCTION_TYPE.JUMP_FORWARD, ti, unit.id, -1);
-    this.#instrs[jifp_index].operand = this.#instrs.length - jifp_index - 1;
+    this.#operands[jifp_index] = this.#instrs.length - jifp_index - 1;
     if (expr.alternate) {
       this.#emitExpr(unit, expr.alternate, silent);
     }
-    this.#instrs[jf_index].operand = this.#instrs.length - jf_index - 1;
+    this.#operands[jf_index] = this.#instrs.length - jf_index - 1;
   }
 
   #emitBinary(unit: ASTUnit, expr: ASTNode, silent: boolean): void {
@@ -474,7 +482,7 @@ export default class CodeGen {
       }
       this.#push(INSTRUCTION_TYPE.AND, this.#ti(expr), unit.id);
       // Skip the RHS and the AND itself: the (falsy) LHS is the result
-      this.#instrs[jump_index].operand = this.#instrs.length - jump_index - 1;
+      this.#operands[jump_index] = this.#instrs.length - jump_index - 1;
       return;
     }
     if (rhs) {

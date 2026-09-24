@@ -32,6 +32,22 @@ export default class Frame {
     return undefined;
   }
 
+  capture(): Frame {
+    // Share bindings, not stacks or mutable call-frame links.
+    const closure = new Frame();
+    closure.locals = this.locals;
+    let target = closure;
+    let source = this.prevFrame;
+    while (typeof source !== 'undefined') {
+      const parent = new Frame();
+      parent.locals = source.locals;
+      target.prevFrame = parent;
+      target = parent;
+      source = source.prevFrame;
+    }
+    return closure;
+  }
+
   getLocal(var_name: string): mixed {
     const owner_frame = this.resolveLocal(var_name);
     if (typeof owner_frame === 'undefined') {

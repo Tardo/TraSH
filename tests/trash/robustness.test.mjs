@@ -321,12 +321,75 @@ test('enforces source, nesting, collection and string limits', async () => {
   await expect(vm.execute(interpreter.parse("'abc' + 'de'", options))).rejects.toThrow('maxStringLength');
 });
 
-test('functions resolve the calling frame and updates reach existing outer variables', async () => {
+test('functions resolve lexical bindings and updates reach existing outer variables', async () => {
   const {run} = setup();
   await expect(run('$x = 1; function read() { return $x }; function call(x) { return (read) }; call 7')).resolves.toBe(
-    7,
+    1,
   );
   await expect(run('function update() { $x = 2 }; update; $x')).resolves.toBe(2);
+  await expect(run('call 9')).resolves.toBe(2);
+  await expect(
+    run('$f = function () { return $hidden }; function caller(hidden) { return ($$f) }; caller 7', {
+      throwSilentErrors: true,
+    }),
+  ).rejects.toThrow('hidden');
+});
+
+test('escaped closures share mutable bindings but factory calls have independent locals', async () => {
+  const {run} = setup();
+  await run(`
+    function counter(n) { return (function () { $n++; return $n }) };
+    $a = (counter 0); $b = (counter 10)
+  `);
+  await expect(run('[$$a, $$a, $$b, $$a]')).resolves.toEqual([1, 2, 11, 3]);
+  await expect(
+    run(`
+    function pair(n) {
+      return [function () { $n++; return $n }, function () { return $n }]
+    };
+    $pair = (pair 20); $inc = $pair[0]; $read = $pair[1];
+    [($$inc), ($$read), ($$inc), ($$read)]
+  `),
+  ).resolves.toEqual([21, 21, 22, 22]);
+});
+
+test('closures survive block exit and capture the definition environment in callbacks and defaults', async () => {
+  const {run} = setup();
+  await expect(
+    run(`
+    $saved = null;
+    if (true) { $block = 12; $saved = function () { return $block } };
+    invoke $saved
+  `),
+  ).resolves.toBe(12);
+  await expect(
+    run(`
+    $x = 3;
+    function apply(fn, x) { return (invoke $fn) };
+    apply (function (value = $x) { return $value }) 99
+  `),
+  ).resolves.toBe(3);
+  await expect(
+    run(`
+    function readDefault(value = $x) { return $value };
+    function callDefault(x) { return (readDefault) };
+    callDefault 99
+  `),
+  ).resolves.toBe(3);
+});
+
+test('recursive closures retain lexical bindings and parameters shadow captured names', async () => {
+  const {run} = setup();
+  await expect(
+    run(`
+    $n = 100;
+    $factorial = function (n) {
+      if ($n <= 1) { return 1 };
+      return $n * ($$factorial ($n - 1))
+    };
+    [($$factorial 5), $n]
+  `),
+  ).resolves.toEqual([120, 100]);
 });
 
 test('explicit arguments do not evaluate default expressions', async () => {

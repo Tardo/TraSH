@@ -100,6 +100,9 @@ export const LEXERDATA_EXTENDED: Array<number> = LEXERDATA.concat([
 export const LEXERDATA_SET: $ReadOnlySet<number> = new Set(LEXERDATA);
 export const LEXERDATA_EXTENDED_SET: $ReadOnlySet<number> = new Set(LEXERDATA_EXTENDED);
 
+// One opcode byte followed by a signed 32-bit little-endian operand.
+export const INSTRUCTION_SIZE = 5;
+
 export const INSTRUCTION_TYPE = {
   LOAD_NAME: 1,
   LOAD_NAME_CALLEABLE: 2,

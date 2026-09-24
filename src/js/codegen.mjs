@@ -23,6 +23,15 @@ const BINARY_INSTR: Map<number, number> = new Map([
   [LEXER.Or, INSTRUCTION_TYPE.OR],
 ]);
 
+const ASSIGNMENT_INSTR: Map<number, number> = new Map([
+  [LEXER.AssignmentAdd, INSTRUCTION_TYPE.STORE_ADD],
+  [LEXER.AssignmentSubstract, INSTRUCTION_TYPE.STORE_SUBSTRACT],
+  [LEXER.AssignmentMultiply, INSTRUCTION_TYPE.STORE_MULTIPLY],
+  [LEXER.AssignmentDivide, INSTRUCTION_TYPE.STORE_DIVIDE],
+  [LEXER.Increment, INSTRUCTION_TYPE.INCREMENT_NAME],
+  [LEXER.Decrement, INSTRUCTION_TYPE.DECREMENT_NAME],
+]);
+
 // Numeric compiler buffers are packed after jump backpatching. No instruction
 // objects are allocated during compilation or execution.
 export default class CodeGen {
@@ -92,6 +101,29 @@ export default class CodeGen {
     }
   }
 
+  #isScalar(expr: ASTNode | null | void): boolean {
+    if (!expr) return false;
+    if (expr.node === NODE.Literal || expr.node === NODE.Variable) return true;
+    if (expr.node === NODE.Unary) return this.#isScalar(expr.expr);
+    return (
+      expr.node === NODE.Binary && expr.op !== LEXER.And && this.#isScalar(expr.left) && this.#isScalar(expr.right)
+    );
+  }
+
+  #emitScope(unit: ASTUnit, ti: number, level: number): void {
+    // Compound scalar assignments cannot introduce bindings or leave stack values.
+    const needsFrame = !unit.statements.every(
+      stmt =>
+        stmt.node === NODE.Assignment &&
+        stmt.target?.node === NODE.Variable &&
+        ASSIGNMENT_INSTR.has(stmt.token?.type ?? -1) &&
+        (stmt.token?.type === LEXER.Increment || stmt.token?.type === LEXER.Decrement || this.#isScalar(stmt.value)),
+    );
+    if (needsFrame) this.#push(INSTRUCTION_TYPE.PUSH_FRAME, ti, level);
+    this.#emitUnit(unit);
+    if (needsFrame) this.#push(INSTRUCTION_TYPE.POP_FRAME, ti, level);
+  }
+
   #ti(node: ASTNode): number {
     return typeof node.tokenIndex === 'number' ? node.tokenIndex : -1;
   }
@@ -132,9 +164,7 @@ export default class CodeGen {
       case NODE.BlockStatement: {
         const block_unit = stmt.unit;
         if (block_unit) {
-          this.#push(INSTRUCTION_TYPE.PUSH_FRAME, this.#ti(stmt), unit.id);
-          this.#emitUnit(block_unit);
-          this.#push(INSTRUCTION_TYPE.POP_FRAME, this.#ti(stmt), unit.id);
+          this.#emitScope(block_unit, this.#ti(stmt), unit.id);
         }
         break;
       }
@@ -177,7 +207,7 @@ export default class CodeGen {
     let store_operand;
     if (target.node === NODE.Variable) {
       store_operand = this.#pushName(unit, target.name ?? null);
-      store_type = INSTRUCTION_TYPE.STORE_NAME;
+      store_type = ASSIGNMENT_INSTR.get(token.type) ?? INSTRUCTION_TYPE.STORE_NAME;
     } else if (target.node === NODE.Subscript && target.base && target.index) {
       // Emit the full chain but omit the final LOAD_DATA_ATTR: STORE_SUBSCR
       // consumes [data, attr_name, value] from the stack.
@@ -192,9 +222,10 @@ export default class CodeGen {
     }
 
     if (token.type === LEXER.Increment || token.type === LEXER.Decrement) {
-      // ++/-- have no RHS token: inject the implicit constant 1
-      const dindex = this.#pushValue(unit, 1);
-      this.#push(INSTRUCTION_TYPE.LOAD_CONST, this.#ti(stmt), unit.id, dindex);
+      if (store_type === INSTRUCTION_TYPE.STORE_SUBSCR) {
+        const dindex = this.#pushValue(unit, 1);
+        this.#push(INSTRUCTION_TYPE.LOAD_CONST, this.#ti(stmt), unit.id, dindex);
+      }
     } else if (stmt.value) {
       this.#emitExpr(unit, stmt.value, false);
     }
@@ -224,9 +255,7 @@ export default class CodeGen {
       this.#emitUnit(branch.check);
       const jifp_index = this.#push(INSTRUCTION_TYPE.JUMP_IF_FALSE_POP, ti, unit.id, -1);
       const body_start = this.#instrs.length;
-      this.#push(INSTRUCTION_TYPE.PUSH_FRAME, ti, unit.id);
-      this.#emitUnit(branch.body);
-      this.#push(INSTRUCTION_TYPE.POP_FRAME, ti, unit.id);
+      this.#emitScope(branch.body, ti, unit.id);
       const body_len = this.#instrs.length - body_start;
       jump_refs.push(this.#push(INSTRUCTION_TYPE.JUMP_FORWARD, ti, unit.id, -1));
       this.#operands[jifp_index] = body_len + 1;
@@ -236,9 +265,7 @@ export default class CodeGen {
     if (else_body) {
       const jit_index = this.#push(INSTRUCTION_TYPE.JUMP_IF_TRUE, ti, unit.id, -1);
       const else_start = this.#instrs.length;
-      this.#push(INSTRUCTION_TYPE.PUSH_FRAME, ti, unit.id);
-      this.#emitUnit(else_body);
-      this.#push(INSTRUCTION_TYPE.POP_FRAME, ti, unit.id);
+      this.#emitScope(else_body, ti, unit.id);
       this.#operands[jit_index] = this.#instrs.length - else_start;
     }
 
@@ -260,12 +287,10 @@ export default class CodeGen {
     this.#emitUnit(for_init);
     const anchor_index = this.#instrs.length;
     this.#emitUnit(for_check);
-    const jif_index = this.#push(INSTRUCTION_TYPE.JUMP_IF_FALSE, ti, unit.id, -1);
+    const jif_index = this.#push(INSTRUCTION_TYPE.JUMP_IF_FALSE_POP, ti, unit.id, -1);
 
     const body_start = this.#instrs.length;
-    this.#push(INSTRUCTION_TYPE.PUSH_FRAME, ti, unit.id);
-    this.#emitUnit(for_body);
-    this.#push(INSTRUCTION_TYPE.POP_FRAME, ti, unit.id);
+    this.#emitScope(for_body, ti, unit.id);
     const body_len = this.#instrs.length - body_start;
 
     const iter_start = this.#instrs.length;
@@ -310,7 +335,7 @@ export default class CodeGen {
     this.#push(INSTRUCTION_TYPE.LOAD_CONST, -1, head.id, len_index);
     this.#push(INSTRUCTION_TYPE.LOAD_DATA_ATTR, -1, head.id);
     this.#push(INSTRUCTION_TYPE.LESS_THAN_OPEN, -1, head.id);
-    const jif_index = this.#push(INSTRUCTION_TYPE.JUMP_IF_FALSE, ti, unit.id, -1);
+    const jif_index = this.#push(INSTRUCTION_TYPE.JUMP_IF_FALSE_POP, ti, unit.id, -1);
     // $item = __arr[__idx]
     this.#push(INSTRUCTION_TYPE.LOAD_NAME, -1, head.id, arr_index);
     this.#push(INSTRUCTION_TYPE.LOAD_NAME, -1, head.id, idx_index);
@@ -318,9 +343,7 @@ export default class CodeGen {
     this.#push(INSTRUCTION_TYPE.STORE_NAME, item_ti, head.id, item_index);
     // body
     const body_start = this.#instrs.length;
-    this.#push(INSTRUCTION_TYPE.PUSH_FRAME, ti, unit.id);
-    this.#emitUnit(body);
-    this.#push(INSTRUCTION_TYPE.POP_FRAME, ti, unit.id);
+    this.#emitScope(body, ti, unit.id);
     const body_len = this.#instrs.length - body_start;
     // iter: __idx = __idx + 1
     const iter_start = this.#instrs.length;
@@ -419,32 +442,34 @@ export default class CodeGen {
         this.#emitFunction(unit, expr);
         break;
       case NODE.PostfixUpdate: {
-        // Postfix ++/--: load the old value (the expression result), then
-        // update the variable through STORE_NAME — its ++/-- token applies
-        // compound semantics and consumes the injected constant 1.
+        // Postfix ++/-- leaves the old value on the stack.
         const upd_target = expr.target;
         if (!upd_target || upd_target.node !== NODE.Variable) {
           break;
         }
         const name_index = this.#pushName(unit, upd_target.name ?? null);
         this.#push(INSTRUCTION_TYPE.LOAD_NAME, this.#ti(upd_target), unit.id, name_index);
-        const dindex = this.#pushValue(unit, 1);
-        this.#push(INSTRUCTION_TYPE.LOAD_CONST, this.#ti(expr), unit.id, dindex);
-        this.#push(INSTRUCTION_TYPE.STORE_NAME, this.#ti(expr), unit.id, name_index);
+        this.#push(
+          expr.token?.type === LEXER.Increment ? INSTRUCTION_TYPE.INCREMENT_NAME : INSTRUCTION_TYPE.DECREMENT_NAME,
+          this.#ti(expr),
+          unit.id,
+          name_index,
+        );
         break;
       }
       case NODE.PrefixUpdate: {
-        // Prefix ++/--: update the variable first (STORE_NAME with the ++/--
-        // token applies compound semantics, consuming the injected constant
-        // 1), then load the NEW value as the expression result.
+        // Prefix ++/-- updates the binding before loading its new value.
         const upd_target = expr.target;
         if (!upd_target || upd_target.node !== NODE.Variable) {
           break;
         }
         const name_index = this.#pushName(unit, upd_target.name ?? null);
-        const dindex = this.#pushValue(unit, 1);
-        this.#push(INSTRUCTION_TYPE.LOAD_CONST, this.#ti(expr), unit.id, dindex);
-        this.#push(INSTRUCTION_TYPE.STORE_NAME, this.#ti(expr), unit.id, name_index);
+        this.#push(
+          expr.token?.type === LEXER.Increment ? INSTRUCTION_TYPE.INCREMENT_NAME : INSTRUCTION_TYPE.DECREMENT_NAME,
+          this.#ti(expr),
+          unit.id,
+          name_index,
+        );
         this.#push(INSTRUCTION_TYPE.LOAD_NAME, this.#ti(upd_target), unit.id, name_index);
         break;
       }

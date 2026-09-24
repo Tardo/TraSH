@@ -9,14 +9,21 @@ const options = {registeredCmds: vm.getRegisteredCmds()};
 const program = interpreter.parse(source, options);
 async function benchmark() {
   assert.equal(await vm.execute(program), 499500);
-  for (const [name, run] of [
+  for (const [name, run, count] of [
     [
       'parse (1000 programs)',
       () => {
         for (let i = 0; i < 1000; i++) interpreter.parse(source, options);
       },
+      1000,
     ],
-    ['execute (1000 programs)', () => vm.execute(program)],
+    [
+      'execute (100 programs, 1000 iterations each)',
+      async () => {
+        for (let i = 0; i < 100; i++) assert.equal(await vm.execute(program), 499500);
+      },
+      100,
+    ],
   ]) {
     for (let i = 0; i < 5; i++) await run();
     const samples = [];
@@ -26,7 +33,7 @@ async function benchmark() {
       samples.push(performance.now() - start);
     }
     samples.sort((a, b) => a - b);
-    console.info(`${name}: ${samples[7].toFixed(2)} ms (median of 15)`);
+    console.info(`${name}: ${samples[7].toFixed(2)} ms; ${(samples[7] / count).toFixed(4)} ms/program (median of 15)`);
   }
 }
 

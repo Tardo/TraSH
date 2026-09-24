@@ -14,7 +14,9 @@ export default class Frame {
 
   constructor(cmd_name: string | void, prev_frame: Frame | void) {
     this.cmd = cmd_name;
-    this.locals = Object.setPrototypeOf({}, null);
+    // Allocate the null-prototype dictionary directly for each block/loop frame.
+    // $FlowFixMe[incompatible-type] Flow's indexer type expects Object.prototype.
+    this.locals = Object.create(null);
     this.args = [];
     this.stack = [];
     this.prevFrame = prev_frame;

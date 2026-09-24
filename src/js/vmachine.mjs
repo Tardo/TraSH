@@ -17,6 +17,7 @@ import InvalidValueError from './exceptions/invalid_value_error';
 import NotExpectedCommandArgumentError from './exceptions/not_expected_command_argument_error';
 import UnknownCommandError from './exceptions/unknown_command_error';
 import UnknownNameError from './exceptions/unknown_name_error';
+import UnknownStoreValue from './exceptions/unknown_store_value';
 import InvalidCommandDefintionError from './exceptions/invalid_command_definition_error';
 import pluck from './utils/pluck';
 import isNumber from './utils/is_number';
@@ -26,6 +27,8 @@ import type {RegisteredCMD, CMDDef, ParseInfo, CMDCallbackArgs, TokenInfo, ArgDe
 import type {Plugin} from './plugin';
 
 type FunctionHandle = {[string]: mixed};
+type ExecutionBudget = {remaining: number, ticks: number};
+type NumericBinding = {owner: Frame, name: string, value: number, dirty: boolean};
 
 export type ProcessCommandJobOptions = {
   cmdRaw: string,
@@ -70,7 +73,7 @@ const DEFAULT_TOKEN: TokenInfo = {
 export default class VMachine {
   #registeredCmds: RegisteredCMD = Object.setPrototypeOf({}, null);
   #globals: {[string]: mixed} = Object.setPrototypeOf({}, null);
-  #executions: WeakMap<EvalOptions, {remaining: number, ticks: number}> = new WeakMap();
+  #executions: WeakMap<EvalOptions, ExecutionBudget> = new WeakMap();
   #functionHandles: WeakMap<{...}, FunctionHandle> = new WeakMap();
   #functionValues: WeakMap<{...}, CMDDef> = new WeakMap();
   options: VMachineOptions;
@@ -356,7 +359,6 @@ export default class VMachine {
   }
 
   async execute(parse_info: ParseInfo, opts?: EvalOptions, aframe?: Frame, collectAll?: boolean): Promise<mixed> {
-    const {program} = parse_info;
     const sopts = {
       isData: false,
       silent: false,
@@ -364,6 +366,8 @@ export default class VMachine {
       ...opts,
     };
     let execution = opts ? this.#executions.get(opts) : undefined;
+    // External frames retain direct binding access; nested VM calls share our budget.
+    const numeric = !aframe || typeof execution !== 'undefined';
     if (!execution) {
       const limit = sopts.maxInstructions ?? this.options.maxInstructions ?? 1_000_000;
       if (!Number.isSafeInteger(limit) || limit < 1)
@@ -373,7 +377,7 @@ export default class VMachine {
     this.#executions.set(sopts, execution);
     const signal = sopts.signal;
     if (signal?.aborted) throw new ExecutionStoppedError('Execution aborted');
-    const {instructions, constants, sourceMap} = program;
+    const {instructions, constants, sourceMap} = parse_info.program;
     const bytecode = new DataView(instructions.buffer, instructions.byteOffset, instructions.byteLength);
     const instrLen = instructions.length / INSTRUCTION_SIZE;
     let rootFrame = aframe;
@@ -382,6 +386,7 @@ export default class VMachine {
       rootFrame.locals = this.#globals;
     }
     const callStack = [];
+    const slowLoops: Set<number> = new Set();
     let eoe = false;
     let activeFrame = rootFrame;
     // Tokens are only needed by a few instructions (mostly on error paths),
@@ -391,6 +396,19 @@ export default class VMachine {
         ? parse_info.inputTokens[sourceMap[index * 2]][sourceMap[index * 2 + 1]]
         : DEFAULT_TOKEN;
     for (let index = 0; !eoe && index < instrLen; ++index) {
+      if (signal?.aborted) throw new ExecutionStoppedError('Execution aborted');
+      if (
+        numeric &&
+        instructions[index * INSTRUCTION_SIZE] === INSTRUCTION_TYPE.JUMP_BACKWARD &&
+        !slowLoops.has(index)
+      ) {
+        const loop = index;
+        const remaining = execution.remaining;
+        index = this.#runNumeric(parse_info, activeFrame, index, execution);
+        // ponytail: skip short numeric slices; use block analysis if mixed loops dominate.
+        if (remaining - execution.remaining < 32) slowLoops.add(loop);
+        if (index >= instrLen) break;
+      }
       if (--execution.remaining < 0) throw new ExecutionStoppedError('Instruction limit exceeded');
       if (++execution.ticks === 65_536) {
         execution.ticks = 0;
@@ -579,7 +597,7 @@ export default class VMachine {
                   if (frame.stack.length === 1 && frame.args.length === 0) {
                     const fn_args_len: number = this.#functionDefinition(frame.stack[0])?.args.length ?? 0;
                     if (fn_args_len > 0) {
-                      activeFrame = callStack.at(-1) || rootFrame;
+                      activeFrame = callStack[callStack.length - 1] || rootFrame;
                       activeFrame.stack.push(frame.stack[0]);
                       break;
                     }
@@ -602,7 +620,7 @@ export default class VMachine {
                 parse_info.inputRawString,
                 opcode === INSTRUCTION_TYPE.CALL_FUNCTION_SILENT || sopts.silent === true,
               );
-              activeFrame = callStack.at(-1) || rootFrame;
+              activeFrame = callStack[callStack.length - 1] || rootFrame;
               activeFrame.stack.push(ret);
             }
           }
@@ -610,20 +628,35 @@ export default class VMachine {
         case INSTRUCTION_TYPE.RETURN_VALUE:
           {
             const frame = callStack.pop() || rootFrame;
-            activeFrame = callStack.at(-1) || rootFrame;
+            activeFrame = callStack[callStack.length - 1] || rootFrame;
             activeFrame.stack.push(frame.stack.pop());
             eoe = true;
           }
           break;
         case INSTRUCTION_TYPE.STORE_NAME:
+        case INSTRUCTION_TYPE.STORE_ADD:
+        case INSTRUCTION_TYPE.STORE_SUBSTRACT:
+        case INSTRUCTION_TYPE.STORE_MULTIPLY:
+        case INSTRUCTION_TYPE.STORE_DIVIDE:
+        case INSTRUCTION_TYPE.INCREMENT_NAME:
+        case INSTRUCTION_TYPE.DECREMENT_NAME:
           {
-            const token = getToken(index);
+            const assignment =
+              opcode === INSTRUCTION_TYPE.STORE_NAME
+                ? getToken(index).type
+                : opcode === INSTRUCTION_TYPE.INCREMENT_NAME
+                  ? LEXER.Increment
+                  : opcode === INSTRUCTION_TYPE.DECREMENT_NAME
+                    ? LEXER.Decrement
+                    : LEXER.AssignmentAdd + opcode - INSTRUCTION_TYPE.STORE_ADD;
+            const increment = opcode === INSTRUCTION_TYPE.INCREMENT_NAME || opcode === INSTRUCTION_TYPE.DECREMENT_NAME;
             const vname = constants[operand];
             // An empty stack means a malformed assignment (e.g. '$x ='); a popped
             // 'undefined' is now a legit value (missing dict/array member access)
-            const has_value = activeFrame.stack.length > 0;
-            const vvalue = activeFrame.stack.pop();
+            const has_value = increment || activeFrame.stack.length > 0;
+            const vvalue = increment ? 1 : activeFrame.stack.pop();
             if (typeof vname !== 'string') {
+              const token = getToken(index);
               if (!token) {
                 throw new InvalidInstructionError();
               }
@@ -633,19 +666,22 @@ export default class VMachine {
               throw new InvalidTokenError(value_token.value, value_token.start, value_token.end);
             } else {
               if (
-                token.type === LEXER.AssignmentAdd ||
-                token.type === LEXER.AssignmentSubstract ||
-                token.type === LEXER.AssignmentMultiply ||
-                token.type === LEXER.AssignmentDivide ||
-                token.type === LEXER.Increment ||
-                token.type === LEXER.Decrement
+                assignment === LEXER.AssignmentAdd ||
+                assignment === LEXER.AssignmentSubstract ||
+                assignment === LEXER.AssignmentMultiply ||
+                assignment === LEXER.AssignmentDivide ||
+                assignment === LEXER.Increment ||
+                assignment === LEXER.Decrement
               ) {
-                const stored_value = activeFrame.getLocal(vname);
+                const owner_frame = activeFrame.resolveLocal(vname);
+                if (typeof owner_frame === 'undefined') throw new UnknownStoreValue(vname);
+                const stored_value = owner_frame.locals[vname];
                 if (typeof stored_value === 'undefined') {
+                  const token = getToken(index);
                   throw new InvalidNameError(vname, token.start, token.end);
                 }
 
-                activeFrame.setLocal(vname, this.#applyAssignment(token.type, stored_value, vvalue));
+                owner_frame.locals[vname] = this.#applyAssignment(assignment, stored_value, vvalue);
               } else {
                 activeFrame.setLocal(vname, vvalue);
               }
@@ -736,7 +772,7 @@ export default class VMachine {
           break;
         case INSTRUCTION_TYPE.POP_FRAME:
           callStack.pop();
-          activeFrame = callStack.at(-1) || rootFrame;
+          activeFrame = callStack[callStack.length - 1] || rootFrame;
           break;
         case INSTRUCTION_TYPE.MAKE_FUNCTION:
           {
@@ -771,7 +807,7 @@ export default class VMachine {
           break;
         case INSTRUCTION_TYPE.JUMP_IF_FALSE:
           {
-            activeFrame.lastFlowCheck = activeFrame.stack.at(-1);
+            activeFrame.lastFlowCheck = activeFrame.stack[activeFrame.stack.length - 1];
             const num_to_skip = operand;
             if (
               typeof activeFrame.lastFlowCheck === 'undefined' ||
@@ -824,9 +860,129 @@ export default class VMachine {
       }
     }
     if (signal?.aborted) throw new ExecutionStoppedError('Execution aborted');
-    if (collectAll === true && activeFrame.stack.length > 1) {
-      return [...activeFrame.stack];
-    }
+    if (collectAll === true && activeFrame.stack.length > 1) return [...activeFrame.stack];
     return activeFrame.stack.pop();
+  }
+
+  // Stay synchronous while executing numeric instructions in one lexical frame.
+  // Stop before effects, type errors, budget exhaustion or an event-loop yield;
+  // the general dispatcher handles that instruction without repeating any work.
+  #runNumeric(parse_info: ParseInfo, frame: Frame, start: number, execution: ExecutionBudget): number {
+    const {instructions, constants} = parse_info.program;
+    const view = new DataView(instructions.buffer, instructions.byteOffset, instructions.byteLength);
+    const length = instructions.length / INSTRUCTION_SIZE;
+    const available = Math.min(execution.remaining, 65_535 - execution.ticks);
+    const slots: Array<NumericBinding | void> = [];
+    const bindings: Map<string, NumericBinding> = new Map();
+    const stack = frame.stack;
+    let index = start;
+    let count = 0;
+    try {
+      while (count < available && index < length) {
+        const opcode = instructions[index * INSTRUCTION_SIZE];
+        const operand = view.getInt32(index * INSTRUCTION_SIZE + 1, true);
+        switch (opcode) {
+          case INSTRUCTION_TYPE.LOAD_NAME:
+          case INSTRUCTION_TYPE.STORE_ADD:
+          case INSTRUCTION_TYPE.STORE_SUBSTRACT:
+          case INSTRUCTION_TYPE.STORE_MULTIPLY:
+          case INSTRUCTION_TYPE.STORE_DIVIDE:
+          case INSTRUCTION_TYPE.INCREMENT_NAME:
+          case INSTRUCTION_TYPE.DECREMENT_NAME:
+            {
+              let binding = slots[operand];
+              if (!binding) {
+                const name = constants[operand];
+                if (typeof name !== 'string') return index;
+                binding = bindings.get(name);
+                if (!binding) {
+                  const owner = frame.resolveLocal(name);
+                  if (!owner) return index;
+                  const descriptor = Object.getOwnPropertyDescriptor(owner.locals, name);
+                  if (descriptor?.writable !== true || typeof descriptor.value !== 'number') return index;
+                  binding = {owner, name, value: descriptor.value, dirty: false};
+                  bindings.set(name, binding);
+                }
+                slots[operand] = binding;
+              }
+              const value = binding.value;
+              if (opcode === INSTRUCTION_TYPE.LOAD_NAME) {
+                stack.push(value);
+              } else if (opcode === INSTRUCTION_TYPE.INCREMENT_NAME) {
+                binding.value = value + 1;
+                binding.dirty = true;
+              } else if (opcode === INSTRUCTION_TYPE.DECREMENT_NAME) {
+                binding.value = value - 1;
+                binding.dirty = true;
+              } else {
+                const right = stack[stack.length - 1];
+                if (typeof right !== 'number') return index;
+                stack.pop();
+                if (opcode === INSTRUCTION_TYPE.STORE_ADD) binding.value = value + right;
+                else if (opcode === INSTRUCTION_TYPE.STORE_SUBSTRACT) binding.value = value - right;
+                else if (opcode === INSTRUCTION_TYPE.STORE_MULTIPLY) binding.value = value * right;
+                else binding.value = value / right;
+                binding.dirty = true;
+              }
+            }
+            break;
+          case INSTRUCTION_TYPE.LOAD_CONST:
+            {
+              const value = constants[operand];
+              if (typeof value !== 'number') return index;
+              stack.push(value);
+            }
+            break;
+          case INSTRUCTION_TYPE.ADD:
+          case INSTRUCTION_TYPE.SUBSTRACT:
+          case INSTRUCTION_TYPE.MULTIPLY:
+          case INSTRUCTION_TYPE.DIVIDE:
+          case INSTRUCTION_TYPE.MODULO:
+          case INSTRUCTION_TYPE.GREATER_THAN_OPEN:
+          case INSTRUCTION_TYPE.LESS_THAN_OPEN:
+          case INSTRUCTION_TYPE.GREATER_THAN_CLOSED:
+          case INSTRUCTION_TYPE.LESS_THAN_CLOSED:
+            {
+              const right = stack[stack.length - 1];
+              const left = stack[stack.length - 2];
+              if (typeof right !== 'number' || typeof left !== 'number') return index;
+              stack.pop();
+              const top = stack.length - 1;
+              if (opcode === INSTRUCTION_TYPE.ADD) stack[top] = left + right;
+              else if (opcode === INSTRUCTION_TYPE.SUBSTRACT) stack[top] = left - right;
+              else if (opcode === INSTRUCTION_TYPE.MULTIPLY) stack[top] = left * right;
+              else if (opcode === INSTRUCTION_TYPE.DIVIDE) stack[top] = left / right;
+              else if (opcode === INSTRUCTION_TYPE.MODULO) stack[top] = left % right;
+              else if (opcode === INSTRUCTION_TYPE.GREATER_THAN_OPEN) stack[top] = left > right;
+              else if (opcode === INSTRUCTION_TYPE.LESS_THAN_OPEN) stack[top] = left < right;
+              else if (opcode === INSTRUCTION_TYPE.GREATER_THAN_CLOSED) stack[top] = left >= right;
+              else stack[top] = left <= right;
+            }
+            break;
+          case INSTRUCTION_TYPE.JUMP_IF_FALSE_POP:
+            frame.lastFlowCheck = stack.pop();
+            // $FlowFixMe[sketchy-null-mixed]
+            if (!frame.lastFlowCheck) index += operand;
+            break;
+          case INSTRUCTION_TYPE.JUMP_BACKWARD:
+            index -= operand + 1;
+            break;
+          case INSTRUCTION_TYPE.JUMP_FORWARD:
+            if (operand > 0) index += operand;
+            break;
+          default:
+            return index;
+        }
+        count++;
+        index++;
+      }
+    } finally {
+      for (const binding of bindings.values()) {
+        if (binding.dirty) binding.owner.locals[binding.name] = binding.value;
+      }
+      execution.remaining -= count;
+      execution.ticks += count;
+    }
+    return index;
   }
 }

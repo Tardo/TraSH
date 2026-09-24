@@ -335,6 +335,14 @@ test('functions resolve lexical bindings and updates reach existing outer variab
   ).rejects.toThrow('hidden');
 });
 
+test('compound assignments preserve missing, undefined and invalid binding errors', async () => {
+  const {run} = setup();
+  await expect(run('$missing += 1')).rejects.toMatchObject({name: 'UnknownStoreValue'});
+  await expect(run('$value = undefined; $value += 1')).rejects.toMatchObject({name: 'InvalidNameError'});
+  await expect(run('$value = null; $value += 1')).rejects.toMatchObject({name: 'InvalidValueError'});
+  await expect(run('$value')).resolves.toBeNull();
+});
+
 test('escaped closures share mutable bindings but factory calls have independent locals', async () => {
   const {run} = setup();
   await run(`

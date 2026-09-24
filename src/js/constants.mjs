@@ -144,6 +144,12 @@ export const INSTRUCTION_TYPE = {
   JUMP_FORWARD: 38,
   ADD_SELF: 39,
   JUMP_IF_FALSE_POP: 40,
+  STORE_ADD: 41,
+  STORE_SUBSTRACT: 42,
+  STORE_MULTIPLY: 43,
+  STORE_DIVIDE: 44,
+  INCREMENT_NAME: 45,
+  DECREMENT_NAME: 46,
 
   getHumanType: function (type: number): string {
     const res = Object.entries(INSTRUCTION_TYPE).find(item => item[1] === type);

@@ -43,6 +43,11 @@ npm install @tardo/trash
 
 The package is ESM, so consumers must use `import` or `.mjs` files.
 
+New to TraSH? Follow the [getting started guide](docs/getting-started.md) to build and run your first script from
+scratch.
+
+To add JavaScript functionality, follow the [first plugin guide](docs/first-plugin.md).
+
 The optional standard-library plugins are available separately in
 [`@tardo/trash-stdlib`](https://github.com/Tardo/TraSH-stdlib):
 

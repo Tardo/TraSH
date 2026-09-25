@@ -71,7 +71,8 @@ type annotation is `Any`.
 
 A plugin runs internal functions without access to the virtual machine, frames,
 or execution options. Use it to expose JavaScript capabilities that do not need
-the host command layer.
+the host command layer. For a complete example from project setup to execution,
+see [Create your first TraSH plugin](first-plugin.md).
 
 ```js
 import {ARG} from '@tardo/trash/plugin';

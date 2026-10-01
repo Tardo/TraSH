@@ -164,6 +164,43 @@ test('plugins receive the execution cancellation signal', async () => {
   await expect(run('check_signal', {signal: controller.signal})).resolves.toBe(true);
 });
 
+test.each(['$RID = (bind)', '$RID = function () { rid }'])(
+  'subcommands return values silently with %s',
+  async binding => {
+    const output = [];
+    const {run, vm} = setup({
+      processCommandJob: async ({cmdName, kwargs}, silent) => {
+        if (cmdName === 'bind') return rid;
+        const value = cmdName === 'print' ? kwargs.value : 42;
+        if (!silent) output.push(value);
+        return value;
+      },
+    });
+    const rid = vm.registerCommand('rid', {});
+    vm.registerCommand('bind', {});
+    vm.registerCommand('print', {args: [[ARG.Any, ['v', 'value'], true, 'Value']]});
+    await run(binding);
+
+    for (const [source, result, visible] of [
+      ['print $$RID', 42, [42]],
+      ['print -v $$RID', 42, [42]],
+      ['print 1 + $$RID', 43, [43]],
+      ['print true ? $$RID : 0', 42, [42]],
+      ['print (print $$RID)', 42, [42]],
+      ['[$$RID]', [42], []],
+      ['$value = $$RID; print $value', 42, [42]],
+      ['function value() { return $$RID }; print (value)', 42, [42]],
+      ['silent print $$RID', 42, []],
+      ['$$RID', 42, [42]],
+      ['if (true) { rid }', undefined, [42]],
+      ['print $$RID; print 7', 7, [42, 7]],
+    ]) {
+      output.length = 0;
+      expect({source, result: await run(source), output}).toEqual({source, result, output: visible});
+    }
+  },
+);
+
 test('silent suppresses host callback errors consistently', async () => {
   const {run, vm} = setup({
     processCommandJob: async () => {
@@ -230,6 +267,8 @@ test('host-delegated executions retain options and share the instruction budget'
   const options = {silent: true, throwSilentErrors: true, signal: controller.signal, maxInstructions: 100};
   await expect(run('delegate', options)).rejects.toBe(error);
   await expect(run('recurse', options)).rejects.toThrow('Instruction limit exceeded');
+  await expect(run('(delegate)', {...options, silent: false})).rejects.toBe(error);
+  await expect(run('(recurse)', {...options, silent: false})).rejects.toThrow('Instruction limit exceeded');
 });
 
 test('required arguments are checked even when none are supplied', async () => {

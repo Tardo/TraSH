@@ -149,6 +149,11 @@ preserves unquoted shell arguments containing URLs. Comments are masked with
 whitespace, preserving source offsets. Unterminated strings, containers and
 block comments are rejected during parsing.
 
+Subcommands used as values run silently by default: in `print $$RID` or
+`print (rid)`, only `print` produces output. The host receives `true` as the
+second `processCommandJob` argument for the subcommand and should still return
+its value. Nested function calls inherit this silent mode.
+
 `silent command ...` returns `null` when its execution callback throws, for
 both internal and host-delegated commands. Syntax errors, argument validation,
 rejected unsafe confirmations and execution-control errors still propagate.

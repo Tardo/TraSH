@@ -298,13 +298,21 @@ export default class VMachine {
   }
 
   async #invokeFunction(
-    opts: EvalOptions,
+    options: EvalOptions,
     frame: Frame,
     name: string,
     cmd_def: CMDDef,
     cmdRaw: string,
-    silent: boolean,
+    callSilent: boolean,
   ): Promise<mixed> {
+    const silent = callSilent || options.silent === true;
+    let opts = options;
+    if (silent && opts.silent !== true) {
+      // Nested execution inherits silence without resetting the shared budget.
+      const execution = this.#executions.get(opts);
+      opts = {...opts, silent: true};
+      if (execution) this.#executions.set(opts, execution);
+    }
     // Execution-time safety gate.
     if (cmd_def?.unsafe === true && this.options.confirmUnsafe) {
       const approved = await this.options.confirmUnsafe(name, cmdRaw);
@@ -611,14 +619,13 @@ export default class VMachine {
                   cmd_def = functionDefinition;
                 }
               }
-              // Subframes are executed in silent mode
               const ret = await this.#invokeFunction(
                 sopts,
                 frame,
                 frame_cmd,
                 cmd_def,
                 parse_info.inputRawString,
-                opcode === INSTRUCTION_TYPE.CALL_FUNCTION_SILENT || sopts.silent === true,
+                opcode === INSTRUCTION_TYPE.CALL_FUNCTION_SILENT,
               );
               activeFrame = callStack[callStack.length - 1] || rootFrame;
               activeFrame.stack.push(ret);

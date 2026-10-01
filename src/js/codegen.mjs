@@ -139,7 +139,7 @@ export default class CodeGen {
         break;
       case NODE.ExpressionStatement:
         if (stmt.expr) {
-          this.#emitExpr(unit, stmt.expr, false);
+          this.#emitExpr(unit, stmt.expr);
         }
         break;
       case NODE.FunctionDef:
@@ -148,7 +148,7 @@ export default class CodeGen {
         break;
       case NODE.Return:
         if (stmt.expr) {
-          this.#emitExpr(unit, stmt.expr, false);
+          this.#emitExpr(unit, stmt.expr);
         } else {
           const dindex = this.#pushValue(unit, null);
           this.#push(INSTRUCTION_TYPE.LOAD_CONST, this.#ti(stmt), unit.id, dindex);
@@ -191,7 +191,7 @@ export default class CodeGen {
       if (arg.argToken !== null) {
         this.#push(INSTRUCTION_TYPE.LOAD_ARG, arg.argTokenIndex, unit.id, -1);
       } else if (arg.value) {
-        this.#emitExpr(unit, arg.value, silent);
+        this.#emitExpr(unit, arg.value);
       }
     }
     this.#push(silent ? INSTRUCTION_TYPE.CALL_FUNCTION_SILENT : INSTRUCTION_TYPE.CALL_FUNCTION, -1, unit.id);
@@ -213,7 +213,7 @@ export default class CodeGen {
       // consumes [data, attr_name, value] from the stack.
       const target_base = target.base;
       const target_index = target.index;
-      this.#emitExpr(unit, target_base, false);
+      this.#emitExpr(unit, target_base);
       this.#emitUnit(target_index);
       store_operand = -1;
       store_type = INSTRUCTION_TYPE.STORE_SUBSCR;
@@ -227,7 +227,7 @@ export default class CodeGen {
         this.#push(INSTRUCTION_TYPE.LOAD_CONST, this.#ti(stmt), unit.id, dindex);
       }
     } else if (stmt.value) {
-      this.#emitExpr(unit, stmt.value, false);
+      this.#emitExpr(unit, stmt.value);
     }
     this.#push(store_type, this.#ti(stmt), unit.id, store_operand);
   }
@@ -324,7 +324,7 @@ export default class CodeGen {
 
     this.#push(INSTRUCTION_TYPE.PUSH_FRAME, ti, unit.id);
     // __arr = <iterable>; __idx = 0
-    this.#emitExpr(head, iterable, false);
+    this.#emitExpr(head, iterable);
     this.#push(INSTRUCTION_TYPE.STORE_NAME, -1, head.id, arr_index);
     this.#push(INSTRUCTION_TYPE.LOAD_CONST, -1, head.id, zero_index);
     this.#push(INSTRUCTION_TYPE.STORE_NAME, -1, head.id, idx_index);
@@ -373,7 +373,7 @@ export default class CodeGen {
     }
   }
 
-  #emitExpr(unit: ASTUnit, expr: ASTNode, silent: boolean): void {
+  #emitExpr(unit: ASTUnit, expr: ASTNode): void {
     switch (expr.node) {
       case NODE.Missing:
         break;
@@ -390,16 +390,12 @@ export default class CodeGen {
       case NODE.VarCall: {
         const dindex = this.#pushName(unit, expr.name ?? null);
         this.#push(INSTRUCTION_TYPE.LOAD_NAME_CALLEABLE, this.#ti(expr), unit.id, dindex);
-        this.#push(
-          silent || unit.silent ? INSTRUCTION_TYPE.CALL_FUNCTION_SILENT : INSTRUCTION_TYPE.CALL_FUNCTION,
-          -1,
-          unit.id,
-        );
+        this.#push(INSTRUCTION_TYPE.CALL_FUNCTION_SILENT, -1, unit.id);
         break;
       }
       case NODE.Unary:
         if (expr.expr) {
-          this.#emitExpr(unit, expr.expr, silent);
+          this.#emitExpr(unit, expr.expr);
         }
         this.#push(
           expr.op === LEXER.Not ? INSTRUCTION_TYPE.NOT : INSTRUCTION_TYPE.UNITARY_NEGATIVE,
@@ -408,16 +404,16 @@ export default class CodeGen {
         );
         break;
       case NODE.Binary:
-        this.#emitBinary(unit, expr, silent);
+        this.#emitBinary(unit, expr);
         break;
       case NODE.Ternary:
-        this.#emitTernary(unit, expr, silent);
+        this.#emitTernary(unit, expr);
         break;
       case NODE.Subscript: {
         const sub_base = expr.base;
         const sub_index = expr.index;
         if (sub_base && sub_index) {
-          this.#emitExpr(unit, sub_base, silent);
+          this.#emitExpr(unit, sub_base);
           this.#emitUnit(sub_index);
           this.#push(INSTRUCTION_TYPE.LOAD_DATA_ATTR, this.#ti(expr), unit.id);
         }
@@ -478,32 +474,32 @@ export default class CodeGen {
 
   // cond ? cons : alt — same JUMP_IF_FALSE_POP/JUMP_FORWARD shape as #emitIf,
   // minus the PUSH_FRAME/POP_FRAME (a pure expression needs no new scope).
-  #emitTernary(unit: ASTUnit, expr: ASTNode, silent: boolean): void {
+  #emitTernary(unit: ASTUnit, expr: ASTNode): void {
     const ti = this.#ti(expr);
     if (expr.test) {
-      this.#emitExpr(unit, expr.test, silent);
+      this.#emitExpr(unit, expr.test);
     }
     const jifp_index = this.#push(INSTRUCTION_TYPE.JUMP_IF_FALSE_POP, ti, unit.id, -1);
     if (expr.consequent) {
-      this.#emitExpr(unit, expr.consequent, silent);
+      this.#emitExpr(unit, expr.consequent);
     }
     const jf_index = this.#push(INSTRUCTION_TYPE.JUMP_FORWARD, ti, unit.id, -1);
     this.#operands[jifp_index] = this.#instrs.length - jifp_index - 1;
     if (expr.alternate) {
-      this.#emitExpr(unit, expr.alternate, silent);
+      this.#emitExpr(unit, expr.alternate);
     }
     this.#operands[jf_index] = this.#instrs.length - jf_index - 1;
   }
 
-  #emitBinary(unit: ASTUnit, expr: ASTNode, silent: boolean): void {
+  #emitBinary(unit: ASTUnit, expr: ASTNode): void {
     if (expr.left) {
-      this.#emitExpr(unit, expr.left, silent);
+      this.#emitExpr(unit, expr.left);
     }
     const rhs = expr.right;
     if (expr.op === LEXER.And) {
       const jump_index = this.#push(INSTRUCTION_TYPE.JUMP_IF_FALSE, this.#ti(expr), unit.id, -1);
       if (rhs) {
-        this.#emitExpr(unit, rhs, silent);
+        this.#emitExpr(unit, rhs);
       }
       this.#push(INSTRUCTION_TYPE.AND, this.#ti(expr), unit.id);
       // Skip the RHS and the AND itself: the (falsy) LHS is the result
@@ -511,7 +507,7 @@ export default class CodeGen {
       return;
     }
     if (rhs) {
-      this.#emitExpr(unit, rhs, silent);
+      this.#emitExpr(unit, rhs);
     }
     const instr_type = BINARY_INSTR.get(expr.op ?? -1);
     if (typeof instr_type !== 'undefined') {
